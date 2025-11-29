@@ -1,6 +1,5 @@
 --cpu=Cortex-M4.fp.sp
 "hello\startup_stm32f401xe.o"
-"hello\gy86.o"
 "hello\main_1.o"
 "hello\gpio.o"
 "hello\i2c.o"
