@@ -93,6 +93,7 @@ extern I2C_HandleTypeDef hi2c1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 void SystemClock_Config(void);
 void Motor_SetSpeed(TIM_HandleTypeDef *htim, uint32_t Channel, uint16_t speed);
