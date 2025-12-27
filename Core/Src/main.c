@@ -87,8 +87,10 @@ uint32_t D2_Temperature_RAW; // 原始温度值
 // MS5611 校准参数 (PROM数据)
 uint16_t C[7]; // C[1]~C[6] 有效
 
-// 外部 I2C 和 UART 句柄声明
-extern I2C_HandleTypeDef hi2c1;
+// PPM 协议一般有 8 个通道
+uint16_t PPM_Values[8] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500}; 
+uint8_t  PPM_Index = 0;    // 当前正在捕获第几个通道
+uint32_t last_capture = 0; // 上一次捕获的时间戳
 
 /* USER CODE END PV */
 
@@ -111,7 +113,7 @@ void All_Sensors_Init(void);
 void MPU6050_Read_Raw(void);
 void HMC5883L_Read_Raw(void);
 void MS5611_Read_Raw(void);
-
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
 /* USER CODE END 0 */
 
 /**
@@ -146,25 +148,43 @@ int main(void)
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   MX_TIM3_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+	HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1); //PPM
 	All_Sensors_Init(); // 调用初始化函数
 	//I2C_HandleTypeDef hi2c1;
 	while (1)
     {
-			//通过串口发送字符串
-			char txData[] = "Hello Bluetooth\r\n";
-			HAL_UART_Transmit(&huart1, (uint8_t *)txData, strlen(txData), 100);
-			//HAL_Delay(5000);
-			Motor_SetSpeed(&htim3, TIM_CHANNEL_4, 1000);
-			
-			//HAL_Delay(3000);
-			Motor_SetSpeed(&htim3, TIM_CHANNEL_4, 1200);
-			//HAL_Delay(10000);
-			Motor_SetSpeed(&htim3, TIM_CHANNEL_4, 1600);
-			//HAL_Delay(10000);
-			Motor_SetSpeed(&htim3, TIM_CHANNEL_4, 2000);
-			//HAL_Delay(10000);
+			// ==========================================
+      // 1. 遥控器控制电机部分
+      // ==========================================
+      // 读取油门通道 (T8FB通常通道3是油门，对应数组下标2)
+      // 注意：请先确认你的遥控器是否已解锁
+      uint16_t throttle_input = PPM_Values[2]; 
+
+      // 安全保护：如果信号丢失或异常，强制归零
+      if (throttle_input < 900 || throttle_input > 2200) {
+          throttle_input = 1000;
+      }
+
+      // 设置死区：低油门时强制为0或最低怠速，防止电机嘀嘀响
+      if (throttle_input < 1050) {
+          throttle_input = 1000; 
+      }
+      
+      // 限制最大值
+      if (throttle_input > 2000) {
+          throttle_input = 2000;
+      }
+
+      // 将油门值应用到电机 (假设电调行程是 1000-2000，直接赋值即可)
+      Motor_SetSpeed(&htim3, TIM_CHANNEL_4, throttle_input);
+
+
+      // ==========================================
+      // 2. 传感器数据读取与打印部分
+      // ==========================================
 			
 			MPU6050_Read_Raw();
 			HMC5883L_Read_Raw();
@@ -190,7 +210,7 @@ int main(void)
 							D1_Pressure_RAW, D2_Temperature_RAW);
 			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
 
-			HAL_Delay(100000); // 100ms 刷新一次
+			HAL_Delay(500);
     }
   /* USER CODE END 2 */
 
@@ -358,25 +378,22 @@ void HMC5883L_Init(void)
 void MS5611_PROM_Read(void)
 {
     uint8_t Data_Rx[2];
-    uint8_t i;
+    uint8_t cmd; // 定义一个变量来存命令
+		uint8_t i;
 
     // 1. 发送 Reset 命令
-    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, (uint8_t*)MS_CMD_RESET, 1, 100);
-    HAL_Delay(5); // 等待复位完成
+    cmd = MS_CMD_RESET; // 假设宏定义是 0x1E
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+    HAL_Delay(10); // 复位需要一点时间
 
-    // 2. 读取 6 个校准字 C1 到 C6 (共 12 字节)
     for (i = 0; i < 6; i++)
     {
         uint8_t reg_addr = MS_CMD_PROM_READ_BASE + (i * 2);
-
-        // 发送读取 PROM 地址命令 (例如 0xA2, 0xA4, ...)
         HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &reg_addr, 1, 100);
-
-        // 读取 2 字节数据
-        HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Data_Rx, 2, 100);
-
-        // 拼接成 16 位整数 (C[1] ~ C[6])
-        C[i+1] = (uint16_t)(Data_Rx[0] << 8 | Data_Rx[1]);
+        if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Data_Rx, 2, 100) == HAL_OK)
+        {
+            C[i+1] = (uint16_t)(Data_Rx[0] << 8 | Data_Rx[1]);
+        }
     }
 }
 
@@ -388,7 +405,7 @@ void All_Sensors_Init(void)
 {
     MPU6050_Init();
     HMC5883L_Init();
-    MS5611_PROM_Read(); // MS5611 必须在启动时读取校准数据
+    MS5611_PROM_Read();
 }
 
 // ------------------- 读取函数 -------------------
@@ -441,36 +458,67 @@ void HMC5883L_Read_Raw(void)
 void MS5611_Read_Raw(void)
 {
     uint8_t Rx_Buf[3];
+    uint8_t cmd;
 
-    // ----------------- 1. 读取原始压力 (D1) -----------------
-    // 发送 D1 转换命令 (OSR=4096, 0x48)
-    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, (uint8_t*)MS_CMD_D1_4096, 1, 100);
-    HAL_Delay(10); // 等待转换完成 (4096 OSR 需要 ~9.04ms)
+    // --- 1. 读取原始压力 (D1) ---
+    cmd = MS_CMD_D1_4096; // 0x48
+    HAL_StatusTypeDef status;
+    
+    // 正确发送转换命令
+    status = HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+    if (status != HAL_OK) return; // 如果地址不对，这里会直接退出
 
-    uint8_t read_adc_cmd = MS_CMD_READ_ADC; // MS_CMD_READ_ADC = 0x00
-
-		// 发送读取 ADC 结果命令 (0x00)
-		HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &read_adc_cmd, 1, 100); 
-		// 注意这里传递的是 &read_adc_cmd 的地址
-
-		// 读取 3 字节 ADC 数据
-		if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Rx_Buf, 3, 100) == HAL_OK)
-		{
-				D1_Pressure_RAW = (uint32_t)(Rx_Buf[0] << 16 | Rx_Buf[1] << 8 | Rx_Buf[2]);
-		}
-
-    // ----------------- 2. 读取原始温度 (D2) -----------------
-    // 发送 D2 转换命令 (OSR=4096, 0x58)
-    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, (uint8_t*)MS_CMD_D2_4096, 1, 100);
     HAL_Delay(10); // 等待转换完成
 
-    uint8_t read_adc_cmd_2 = MS_CMD_READ_ADC;
-		HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &read_adc_cmd_2, 1, 100);
+    cmd = MS_CMD_READ_ADC; // 0x00
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
 
-		if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Rx_Buf, 3, 100) == HAL_OK)
-		{
-				D2_Temperature_RAW = (uint32_t)(Rx_Buf[0] << 16 | Rx_Buf[1] << 8 | Rx_Buf[2]);
-		}
+    if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Rx_Buf, 3, 100) == HAL_OK)
+    {
+        D1_Pressure_RAW = (uint32_t)(Rx_Buf[0] << 16 | Rx_Buf[1] << 8 | Rx_Buf[2]);
+    }
+
+    // --- 2. 读取原始温度 (D2) ---
+    cmd = MS_CMD_D2_4096; // 0x58
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+    HAL_Delay(10); 
+
+    cmd = MS_CMD_READ_ADC; // 0x00
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+
+    if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Rx_Buf, 3, 100) == HAL_OK)
+    {
+        D2_Temperature_RAW = (uint32_t)(Rx_Buf[0] << 16 | Rx_Buf[1] << 8 | Rx_Buf[2]);
+    }
+}
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+		if (htim->Instance == TIM2) // 确保是 PPM 定时器
+				{
+						uint32_t current_capture = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+						uint32_t diff;
+
+						// 计算脉宽（处理溢出）
+						if (current_capture >= last_capture) {
+								diff = current_capture - last_capture;
+						} else {
+								diff = (0xFFFFFFFF - last_capture) + current_capture + 1;
+						}
+
+						// 1. 同步帧检测 (>2.5ms)
+						if (diff > 2500) {
+								PPM_Index = 0;
+						}
+						// 2. 有效数据采集 (900us - 2100us)
+						else if (diff >= 900 && diff <= 2100) {
+								if (PPM_Index < 8) {
+										PPM_Values[PPM_Index] = diff;
+										PPM_Index++;
+								}
+						}
+						last_capture = current_capture;
+				}
 }
 
 /* USER CODE END 4 */
