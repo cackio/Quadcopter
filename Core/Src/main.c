@@ -95,7 +95,6 @@ uint32_t last_capture = 0; // 上一次捕获的时间戳
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
-void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 void SystemClock_Config(void);
 void Motor_SetSpeed(TIM_HandleTypeDef *htim, uint32_t Channel, uint16_t speed);
@@ -163,22 +162,17 @@ int main(void)
           throttle_input = 1000;
       }
 
-      if (throttle_input < 1050) {
-          throttle_input = 1000; 
-      }
-      
-      if (throttle_input > 2000) {
-          throttle_input = 2000;
-      }
-
       // 将油门值应用到电机
+			Motor_SetSpeed(&htim3, TIM_CHANNEL_1, throttle_input);
+			Motor_SetSpeed(&htim3, TIM_CHANNEL_2, throttle_input);
+			Motor_SetSpeed(&htim3, TIM_CHANNEL_3, throttle_input);
       Motor_SetSpeed(&htim3, TIM_CHANNEL_4, throttle_input);
+			
 
 
       // ==========================================
       // 传感器数据读取部分
       // ==========================================
-			
 			MPU6050_Read_Raw();
 			HMC5883L_Read_Raw();
 			MS5611_Read_Raw();
@@ -283,21 +277,6 @@ void Motor_SetSpeed(TIM_HandleTypeDef *htim, uint32_t Channel, uint16_t speed)
   __HAL_TIM_SET_COMPARE(htim, Channel, speed); // 设置捕获/比较寄存器值(CCR)来控制占空比[citation:1]
 }
 
-/**
-  * @brief  控制电机方向
-  * @param  direction: 方向，0-正转，1-反转 (具体逻辑根据驱动模块定义)
-  * @retval None
-  */
-void Motor_SetDirection(uint8_t direction)
-{
-  if(direction == 0) { // 正转
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_RESET);
-  } else { // 反转
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1, GPIO_PIN_SET);
-  }
-}
 
 void MPU6050_Init(void)
 {
@@ -347,7 +326,7 @@ void MS5611_PROM_Read(void)
     uint8_t cmd; // 定义一个变量来存命令
 		uint8_t i;
 
-    // 1. 发送 Reset 命令
+    //  发送 Reset 命令
     cmd = MS_CMD_RESET; // 假设宏定义是 0x1E
     HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
     HAL_Delay(10); // 复位需要一点时间
