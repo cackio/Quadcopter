@@ -1,0 +1,1202 @@
+ARM GAS  /tmp/ccVzmrR0.s 			page 1
+
+
+   1              		.cpu cortex-m4
+   2              		.arch armv7e-m
+   3              		.fpu fpv4-sp-d16
+   4              		.eabi_attribute 27, 1
+   5              		.eabi_attribute 28, 1
+   6              		.eabi_attribute 20, 1
+   7              		.eabi_attribute 21, 1
+   8              		.eabi_attribute 23, 3
+   9              		.eabi_attribute 24, 1
+  10              		.eabi_attribute 25, 1
+  11              		.eabi_attribute 26, 1
+  12              		.eabi_attribute 30, 1
+  13              		.eabi_attribute 34, 1
+  14              		.eabi_attribute 18, 4
+  15              		.file	"main.c"
+  16              		.text
+  17              	.Ltext0:
+  18              		.cfi_sections	.debug_frame
+  19              		.file 1 "../application/src/main.c"
+  20              		.section	.text.system_init,"ax",%progbits
+  21              		.align	1
+  22              		.global	system_init
+  23              		.syntax unified
+  24              		.thumb
+  25              		.thumb_func
+  27              	system_init:
+  28              	.LFB124:
+   1:../application/src/main.c **** /**
+   2:../application/src/main.c ****   ******************************************************************************
+   3:../application/src/main.c ****   * @file    main.c
+   4:../application/src/main.c ****   * @brief   STM32F401 应用程序主函数
+   5:../application/src/main.c ****   * @details 本应用通过让 LED 以比 Bootloader 更慢的频率闪烁，
+   6:../application/src/main.c ****   *          来直观指示应用程序正在运行。
+   7:../application/src/main.c ****   ******************************************************************************
+   8:../application/src/main.c ****   */
+   9:../application/src/main.c **** 
+  10:../application/src/main.c **** #include "main.h"
+  11:../application/src/main.c **** 
+  12:../application/src/main.c **** /* 私有变量 */
+  13:../application/src/main.c **** static volatile uint32_t tick_counter = 0;
+  14:../application/src/main.c **** 
+  15:../application/src/main.c **** /**
+  16:../application/src/main.c ****   * @brief  主程序
+  17:../application/src/main.c ****   * @retval 无
+  18:../application/src/main.c ****   */
+  19:../application/src/main.c **** void main(void)
+  20:../application/src/main.c **** {
+  21:../application/src/main.c ****   /* 将向量表重定位到应用区（重要！） */
+  22:../application/src/main.c ****   /* Bootloader 将 VTOR 设为 0x08000000，应用程序需要 0x08010000 */
+  23:../application/src/main.c ****   __disable_irq();
+  24:../application/src/main.c ****   SCB->VTOR = 0x08010000;  /* 应用程序向量表偏移地址 */
+  25:../application/src/main.c ****   __enable_irq();
+  26:../application/src/main.c ****   
+  27:../application/src/main.c ****   /* 初始化系统时钟与外设 */
+  28:../application/src/main.c ****   system_init();
+  29:../application/src/main.c ****   
+  30:../application/src/main.c ****   /* 初始化用于 LED 状态指示的 GPIO */
+ARM GAS  /tmp/ccVzmrR0.s 			page 2
+
+
+  31:../application/src/main.c ****   gpio_init();
+  32:../application/src/main.c ****   
+  33:../application/src/main.c ****   /* 初始化 UART（可选，用于调试输出） */
+  34:../application/src/main.c ****   // uart_init();
+  35:../application/src/main.c ****   
+  36:../application/src/main.c ****   /* 应用主循环 */
+  37:../application/src/main.c ****   while (1) {
+  38:../application/src/main.c ****     /* 以低于 Bootloader 的频率翻转 LED */
+  39:../application/src/main.c ****     led_toggle();
+  40:../application/src/main.c ****     delay_ms(LED_BLINK_DELAY_MS);
+  41:../application/src/main.c ****   }
+  42:../application/src/main.c **** }
+  43:../application/src/main.c **** 
+  44:../application/src/main.c **** /**
+  45:../application/src/main.c ****   * @brief  初始化系统时钟
+  46:../application/src/main.c ****   * @details 使用 HSI 作为 PLL 输入，将系统时钟配置为 84MHz
+  47:../application/src/main.c ****   * @retval 无
+  48:../application/src/main.c ****   */
+  49:../application/src/main.c **** void system_init(void)
+  50:../application/src/main.c **** {
+  29              		.loc 1 50 1 view -0
+  30              		.cfi_startproc
+  31              		@ args = 0, pretend = 0, frame = 0
+  32              		@ frame_needed = 0, uses_anonymous_args = 0
+  33 0000 08B5     		push	{r3, lr}
+  34              	.LCFI0:
+  35              		.cfi_def_cfa_offset 8
+  36              		.cfi_offset 3, -8
+  37              		.cfi_offset 14, -4
+  51:../application/src/main.c ****   /* 使能 HSI */
+  52:../application/src/main.c ****   RCC->CR |= RCC_CR_HSION;
+  38              		.loc 1 52 3 view .LVU1
+  39              		.loc 1 52 6 is_stmt 0 view .LVU2
+  40 0002 094A     		ldr	r2, .L4
+  41 0004 1368     		ldr	r3, [r2]
+  42              		.loc 1 52 11 view .LVU3
+  43 0006 43F00103 		orr	r3, r3, #1
+  44 000a 1360     		str	r3, [r2]
+  53:../application/src/main.c ****   while (!(RCC->CR & RCC_CR_HSIRDY));  /* 等待 HSI 就绪 */
+  45              		.loc 1 53 3 is_stmt 1 view .LVU4
+  46              	.L2:
+  47              		.loc 1 53 10 discriminator 1 view .LVU5
+  48              		.loc 1 53 15 is_stmt 0 discriminator 1 view .LVU6
+  49 000c 064B     		ldr	r3, .L4
+  50 000e 1B68     		ldr	r3, [r3]
+  51              		.loc 1 53 10 discriminator 1 view .LVU7
+  52 0010 13F0020F 		tst	r3, #2
+  53 0014 FAD0     		beq	.L2
+  54:../application/src/main.c ****   
+  55:../application/src/main.c ****   /* 将 PLL 配置为 84MHz 系统时钟 */
+  56:../application/src/main.c ****   /* PLL 输入源 = HSI (16MHz) */
+  57:../application/src/main.c ****   /* PLLM = 16, PLLN = 336, PLLP = 4 => 16MHz * 336 / 16 / 4 = 84MHz */
+  58:../application/src/main.c ****   RCC->PLLCFGR &= ~RCC_PLLCFGR_PLLSRC;  /* 清除 PLL 输入源配置 */
+  54              		.loc 1 58 3 is_stmt 1 view .LVU8
+  55              		.loc 1 58 6 is_stmt 0 view .LVU9
+  56 0016 044A     		ldr	r2, .L4
+  57 0018 5368     		ldr	r3, [r2, #4]
+ARM GAS  /tmp/ccVzmrR0.s 			page 3
+
+
+  58              		.loc 1 58 16 view .LVU10
+  59 001a 23F48003 		bic	r3, r3, #4194304
+  60 001e 5360     		str	r3, [r2, #4]
+  59:../application/src/main.c ****   /* 说明：为简化示例，此处保持默认 HSI 配置 */
+  60:../application/src/main.c ****   
+  61:../application/src/main.c ****   /* 更新 SystemCoreClock 变量 */
+  62:../application/src/main.c ****   SystemCoreClockUpdate();
+  61              		.loc 1 62 3 is_stmt 1 view .LVU11
+  62 0020 FFF7FEFF 		bl	SystemCoreClockUpdate
+  63              	.LVL0:
+  63:../application/src/main.c ****   
+  64:../application/src/main.c ****   /* 启动代码中的 SystemInit() 已将向量表设置为 APP_START_ADDR */
+  65:../application/src/main.c **** }
+  64              		.loc 1 65 1 is_stmt 0 view .LVU12
+  65 0024 08BD     		pop	{r3, pc}
+  66              	.L5:
+  67 0026 00BF     		.align	2
+  68              	.L4:
+  69 0028 00380240 		.word	1073887232
+  70              		.cfi_endproc
+  71              	.LFE124:
+  73              		.section	.text.gpio_init,"ax",%progbits
+  74              		.align	1
+  75              		.global	gpio_init
+  76              		.syntax unified
+  77              		.thumb
+  78              		.thumb_func
+  80              	gpio_init:
+  81              	.LFB125:
+  66:../application/src/main.c **** 
+  67:../application/src/main.c **** /**
+  68:../application/src/main.c ****   * @brief  初始化 LED(GPIO PA5)
+  69:../application/src/main.c ****   * @retval 无
+  70:../application/src/main.c ****   */
+  71:../application/src/main.c **** void gpio_init(void)
+  72:../application/src/main.c **** {
+  82              		.loc 1 72 1 is_stmt 1 view -0
+  83              		.cfi_startproc
+  84              		@ args = 0, pretend = 0, frame = 0
+  85              		@ frame_needed = 0, uses_anonymous_args = 0
+  86              		@ link register save eliminated.
+  73:../application/src/main.c ****   /* 使能 GPIOA 时钟 */
+  74:../application/src/main.c ****   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+  87              		.loc 1 74 3 view .LVU14
+  88              		.loc 1 74 6 is_stmt 0 view .LVU15
+  89 0000 104A     		ldr	r2, .L7
+  90 0002 136B     		ldr	r3, [r2, #48]
+  91              		.loc 1 74 16 view .LVU16
+  92 0004 43F00103 		orr	r3, r3, #1
+  93 0008 1363     		str	r3, [r2, #48]
+  75:../application/src/main.c ****   
+  76:../application/src/main.c ****   /* 将 PA5 配置为输出模式 */
+  77:../application/src/main.c ****   GPIOA->MODER &= ~(3 << (5 * 2));        /* 清除 PA5 模式位 */
+  94              		.loc 1 77 3 is_stmt 1 view .LVU17
+  95              		.loc 1 77 8 is_stmt 0 view .LVU18
+  96 000a 0F4B     		ldr	r3, .L7+4
+  97 000c 1A68     		ldr	r2, [r3]
+ARM GAS  /tmp/ccVzmrR0.s 			page 4
+
+
+  98              		.loc 1 77 16 view .LVU19
+  99 000e 22F44062 		bic	r2, r2, #3072
+ 100 0012 1A60     		str	r2, [r3]
+  78:../application/src/main.c ****   GPIOA->MODER |= (1 << (5 * 2));         /* 设置 PA5 为输出模式 */
+ 101              		.loc 1 78 3 is_stmt 1 view .LVU20
+ 102              		.loc 1 78 8 is_stmt 0 view .LVU21
+ 103 0014 1A68     		ldr	r2, [r3]
+ 104              		.loc 1 78 16 view .LVU22
+ 105 0016 42F48062 		orr	r2, r2, #1024
+ 106 001a 1A60     		str	r2, [r3]
+  79:../application/src/main.c ****   
+  80:../application/src/main.c ****   /* 配置 PA5 输出类型（推挽） */
+  81:../application/src/main.c ****   GPIOA->OTYPER &= ~(1 << 5);             /* 推挽输出 */
+ 107              		.loc 1 81 3 is_stmt 1 view .LVU23
+ 108              		.loc 1 81 8 is_stmt 0 view .LVU24
+ 109 001c 5A68     		ldr	r2, [r3, #4]
+ 110              		.loc 1 81 17 view .LVU25
+ 111 001e 22F02002 		bic	r2, r2, #32
+ 112 0022 5A60     		str	r2, [r3, #4]
+  82:../application/src/main.c ****   
+  83:../application/src/main.c ****   /* 配置 PA5 速度（高速） */
+  84:../application/src/main.c ****   GPIOA->OSPEEDR &= ~(3 << (5 * 2));      /* 清除速度位 */
+ 113              		.loc 1 84 3 is_stmt 1 view .LVU26
+ 114              		.loc 1 84 8 is_stmt 0 view .LVU27
+ 115 0024 9A68     		ldr	r2, [r3, #8]
+ 116              		.loc 1 84 18 view .LVU28
+ 117 0026 22F44062 		bic	r2, r2, #3072
+ 118 002a 9A60     		str	r2, [r3, #8]
+  85:../application/src/main.c ****   GPIOA->OSPEEDR |= (2 << (5 * 2));       /* 高速 */
+ 119              		.loc 1 85 3 is_stmt 1 view .LVU29
+ 120              		.loc 1 85 8 is_stmt 0 view .LVU30
+ 121 002c 9A68     		ldr	r2, [r3, #8]
+ 122              		.loc 1 85 18 view .LVU31
+ 123 002e 42F40062 		orr	r2, r2, #2048
+ 124 0032 9A60     		str	r2, [r3, #8]
+  86:../application/src/main.c ****   
+  87:../application/src/main.c ****   /* 配置 PA5 无上拉/下拉 */
+  88:../application/src/main.c ****   GPIOA->PUPDR &= ~(3 << (5 * 2));        /* 无上拉/下拉 */
+ 125              		.loc 1 88 3 is_stmt 1 view .LVU32
+ 126              		.loc 1 88 8 is_stmt 0 view .LVU33
+ 127 0034 DA68     		ldr	r2, [r3, #12]
+ 128              		.loc 1 88 16 view .LVU34
+ 129 0036 22F44062 		bic	r2, r2, #3072
+ 130 003a DA60     		str	r2, [r3, #12]
+  89:../application/src/main.c ****   
+  90:../application/src/main.c ****   /* 初始关闭 LED */
+  91:../application/src/main.c ****   GPIOA->BSRR = (1 << (5 + 16));          /* 复位 PA5 */
+ 131              		.loc 1 91 3 is_stmt 1 view .LVU35
+ 132              		.loc 1 91 15 is_stmt 0 view .LVU36
+ 133 003c 4FF40012 		mov	r2, #2097152
+ 134 0040 9A61     		str	r2, [r3, #24]
+  92:../application/src/main.c **** }
+ 135              		.loc 1 92 1 view .LVU37
+ 136 0042 7047     		bx	lr
+ 137              	.L8:
+ 138              		.align	2
+ 139              	.L7:
+ARM GAS  /tmp/ccVzmrR0.s 			page 5
+
+
+ 140 0044 00380240 		.word	1073887232
+ 141 0048 00000240 		.word	1073872896
+ 142              		.cfi_endproc
+ 143              	.LFE125:
+ 145              		.section	.text.uart_init,"ax",%progbits
+ 146              		.align	1
+ 147              		.global	uart_init
+ 148              		.syntax unified
+ 149              		.thumb
+ 150              		.thumb_func
+ 152              	uart_init:
+ 153              	.LFB126:
+  93:../application/src/main.c **** 
+  94:../application/src/main.c **** /**
+  95:../application/src/main.c ****   * @brief  初始化 UART2 用于调试（PA2: TX, PA3: RX）
+  96:../application/src/main.c ****   * @details 将 UART2 配置为 115200 波特率，8N1
+  97:../application/src/main.c ****   * @retval 无
+  98:../application/src/main.c ****   */
+  99:../application/src/main.c **** void uart_init(void)
+ 100:../application/src/main.c **** {
+ 154              		.loc 1 100 1 is_stmt 1 view -0
+ 155              		.cfi_startproc
+ 156              		@ args = 0, pretend = 0, frame = 0
+ 157              		@ frame_needed = 0, uses_anonymous_args = 0
+ 158              		@ link register save eliminated.
+ 101:../application/src/main.c ****   /* 为 UART 引脚使能 GPIOA 时钟 */
+ 102:../application/src/main.c ****   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+ 159              		.loc 1 102 3 view .LVU39
+ 160              		.loc 1 102 6 is_stmt 0 view .LVU40
+ 161 0000 1F4B     		ldr	r3, .L10
+ 162 0002 1A6B     		ldr	r2, [r3, #48]
+ 163              		.loc 1 102 16 view .LVU41
+ 164 0004 42F00102 		orr	r2, r2, #1
+ 165 0008 1A63     		str	r2, [r3, #48]
+ 103:../application/src/main.c ****   
+ 104:../application/src/main.c ****   /* 使能 USART2 时钟 */
+ 105:../application/src/main.c ****   RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+ 166              		.loc 1 105 3 is_stmt 1 view .LVU42
+ 167              		.loc 1 105 6 is_stmt 0 view .LVU43
+ 168 000a 1A6C     		ldr	r2, [r3, #64]
+ 169              		.loc 1 105 16 view .LVU44
+ 170 000c 42F40032 		orr	r2, r2, #131072
+ 171 0010 1A64     		str	r2, [r3, #64]
+ 106:../application/src/main.c ****   
+ 107:../application/src/main.c ****   /* 将 PA2 (TX) 与 PA3 (RX) 配置为 UART 功能 */
+ 108:../application/src/main.c ****   /* 为 USART2 设置复用功能 AF7 */
+ 109:../application/src/main.c ****   GPIOA->AFR[0] &= ~(0xF << (2 * 4));     /* 清除 AF2 (PA2) */
+ 172              		.loc 1 109 3 is_stmt 1 view .LVU45
+ 173              		.loc 1 109 13 is_stmt 0 view .LVU46
+ 174 0012 A3F56053 		sub	r3, r3, #14336
+ 175 0016 1A6A     		ldr	r2, [r3, #32]
+ 176              		.loc 1 109 17 view .LVU47
+ 177 0018 22F47062 		bic	r2, r2, #3840
+ 178 001c 1A62     		str	r2, [r3, #32]
+ 110:../application/src/main.c ****   GPIOA->AFR[0] |= (7 << (2 * 4));        /* PA2 设置为 AF7 */
+ 179              		.loc 1 110 3 is_stmt 1 view .LVU48
+ 180              		.loc 1 110 13 is_stmt 0 view .LVU49
+ARM GAS  /tmp/ccVzmrR0.s 			page 6
+
+
+ 181 001e 1A6A     		ldr	r2, [r3, #32]
+ 182              		.loc 1 110 17 view .LVU50
+ 183 0020 42F4E062 		orr	r2, r2, #1792
+ 184 0024 1A62     		str	r2, [r3, #32]
+ 111:../application/src/main.c ****   GPIOA->AFR[0] &= ~(0xF << (3 * 4));     /* 清除 AF3 (PA3) */
+ 185              		.loc 1 111 3 is_stmt 1 view .LVU51
+ 186              		.loc 1 111 13 is_stmt 0 view .LVU52
+ 187 0026 1A6A     		ldr	r2, [r3, #32]
+ 188              		.loc 1 111 17 view .LVU53
+ 189 0028 22F47042 		bic	r2, r2, #61440
+ 190 002c 1A62     		str	r2, [r3, #32]
+ 112:../application/src/main.c ****   GPIOA->AFR[0] |= (7 << (3 * 4));        /* PA3 设置为 AF7 */
+ 191              		.loc 1 112 3 is_stmt 1 view .LVU54
+ 192              		.loc 1 112 13 is_stmt 0 view .LVU55
+ 193 002e 1A6A     		ldr	r2, [r3, #32]
+ 194              		.loc 1 112 17 view .LVU56
+ 195 0030 42F4E042 		orr	r2, r2, #28672
+ 196 0034 1A62     		str	r2, [r3, #32]
+ 113:../application/src/main.c ****   
+ 114:../application/src/main.c ****   /* 将 PA2 和 PA3 设置为复用功能模式 */
+ 115:../application/src/main.c ****   GPIOA->MODER &= ~(3 << (2 * 2));        /* 清除 PA2 模式 */
+ 197              		.loc 1 115 3 is_stmt 1 view .LVU57
+ 198              		.loc 1 115 8 is_stmt 0 view .LVU58
+ 199 0036 1A68     		ldr	r2, [r3]
+ 200              		.loc 1 115 16 view .LVU59
+ 201 0038 22F03002 		bic	r2, r2, #48
+ 202 003c 1A60     		str	r2, [r3]
+ 116:../application/src/main.c ****   GPIOA->MODER |= (2 << (2 * 2));         /* PA2 设为复用模式 */
+ 203              		.loc 1 116 3 is_stmt 1 view .LVU60
+ 204              		.loc 1 116 8 is_stmt 0 view .LVU61
+ 205 003e 1A68     		ldr	r2, [r3]
+ 206              		.loc 1 116 16 view .LVU62
+ 207 0040 42F02002 		orr	r2, r2, #32
+ 208 0044 1A60     		str	r2, [r3]
+ 117:../application/src/main.c ****   GPIOA->MODER &= ~(3 << (3 * 2));        /* 清除 PA3 模式 */
+ 209              		.loc 1 117 3 is_stmt 1 view .LVU63
+ 210              		.loc 1 117 8 is_stmt 0 view .LVU64
+ 211 0046 1A68     		ldr	r2, [r3]
+ 212              		.loc 1 117 16 view .LVU65
+ 213 0048 22F0C002 		bic	r2, r2, #192
+ 214 004c 1A60     		str	r2, [r3]
+ 118:../application/src/main.c ****   GPIOA->MODER |= (2 << (3 * 2));         /* PA3 设为复用模式 */
+ 215              		.loc 1 118 3 is_stmt 1 view .LVU66
+ 216              		.loc 1 118 8 is_stmt 0 view .LVU67
+ 217 004e 1A68     		ldr	r2, [r3]
+ 218              		.loc 1 118 16 view .LVU68
+ 219 0050 42F08002 		orr	r2, r2, #128
+ 220 0054 1A60     		str	r2, [r3]
+ 119:../application/src/main.c ****   
+ 120:../application/src/main.c ****   /* 配置 UART2 */
+ 121:../application/src/main.c ****   /* 配置前先关闭 USART2 */
+ 122:../application/src/main.c ****   USART2->CR1 &= ~USART_CR1_UE;
+ 221              		.loc 1 122 3 is_stmt 1 view .LVU69
+ 222              		.loc 1 122 9 is_stmt 0 view .LVU70
+ 223 0056 A3F5DE33 		sub	r3, r3, #113664
+ 224 005a DA68     		ldr	r2, [r3, #12]
+ 225              		.loc 1 122 15 view .LVU71
+ARM GAS  /tmp/ccVzmrR0.s 			page 7
+
+
+ 226 005c 22F40052 		bic	r2, r2, #8192
+ 227 0060 DA60     		str	r2, [r3, #12]
+ 123:../application/src/main.c ****   
+ 124:../application/src/main.c ****   /* 设置波特率为 115200（假设 APB1 时钟 = 16MHz） */
+ 125:../application/src/main.c ****   /* USART_BRR = f_clk / baud = 16MHz / 115200 ≈ 139 */
+ 126:../application/src/main.c ****   USART2->BRR = 139;
+ 228              		.loc 1 126 3 is_stmt 1 view .LVU72
+ 229              		.loc 1 126 15 is_stmt 0 view .LVU73
+ 230 0062 8B22     		movs	r2, #139
+ 231 0064 9A60     		str	r2, [r3, #8]
+ 127:../application/src/main.c ****   
+ 128:../application/src/main.c ****   /* 配置 8N1：8 位数据位，无校验，1 位停止位 */
+ 129:../application/src/main.c ****   /* 默认值：M=0 (8位数据), PCE=0 (无校验), STOP=00 (1位停止位) */
+ 130:../application/src/main.c ****   
+ 131:../application/src/main.c ****   /* 使能发送器和接收器 */
+ 132:../application/src/main.c ****   USART2->CR1 |= USART_CR1_TE;
+ 232              		.loc 1 132 3 is_stmt 1 view .LVU74
+ 233              		.loc 1 132 9 is_stmt 0 view .LVU75
+ 234 0066 DA68     		ldr	r2, [r3, #12]
+ 235              		.loc 1 132 15 view .LVU76
+ 236 0068 42F00802 		orr	r2, r2, #8
+ 237 006c DA60     		str	r2, [r3, #12]
+ 133:../application/src/main.c ****   USART2->CR1 |= USART_CR1_RE;
+ 238              		.loc 1 133 3 is_stmt 1 view .LVU77
+ 239              		.loc 1 133 9 is_stmt 0 view .LVU78
+ 240 006e DA68     		ldr	r2, [r3, #12]
+ 241              		.loc 1 133 15 view .LVU79
+ 242 0070 42F00402 		orr	r2, r2, #4
+ 243 0074 DA60     		str	r2, [r3, #12]
+ 134:../application/src/main.c ****   
+ 135:../application/src/main.c ****   /* 使能 USART2 */
+ 136:../application/src/main.c ****   USART2->CR1 |= USART_CR1_UE;
+ 244              		.loc 1 136 3 is_stmt 1 view .LVU80
+ 245              		.loc 1 136 9 is_stmt 0 view .LVU81
+ 246 0076 DA68     		ldr	r2, [r3, #12]
+ 247              		.loc 1 136 15 view .LVU82
+ 248 0078 42F40052 		orr	r2, r2, #8192
+ 249 007c DA60     		str	r2, [r3, #12]
+ 137:../application/src/main.c **** }
+ 250              		.loc 1 137 1 view .LVU83
+ 251 007e 7047     		bx	lr
+ 252              	.L11:
+ 253              		.align	2
+ 254              	.L10:
+ 255 0080 00380240 		.word	1073887232
+ 256              		.cfi_endproc
+ 257              	.LFE126:
+ 259              		.section	.text.led_toggle,"ax",%progbits
+ 260              		.align	1
+ 261              		.global	led_toggle
+ 262              		.syntax unified
+ 263              		.thumb
+ 264              		.thumb_func
+ 266              	led_toggle:
+ 267              	.LFB127:
+ 138:../application/src/main.c **** 
+ 139:../application/src/main.c **** /**
+ARM GAS  /tmp/ccVzmrR0.s 			page 8
+
+
+ 140:../application/src/main.c ****   * @brief  翻转 LED 状态
+ 141:../application/src/main.c ****   * @retval 无
+ 142:../application/src/main.c ****   */
+ 143:../application/src/main.c **** void led_toggle(void)
+ 144:../application/src/main.c **** {
+ 268              		.loc 1 144 1 is_stmt 1 view -0
+ 269              		.cfi_startproc
+ 270              		@ args = 0, pretend = 0, frame = 0
+ 271              		@ frame_needed = 0, uses_anonymous_args = 0
+ 272              		@ link register save eliminated.
+ 145:../application/src/main.c ****   /* 翻转 PA5 */
+ 146:../application/src/main.c ****   if (GPIOA->ODR & (1 << 5)) {
+ 273              		.loc 1 146 3 view .LVU85
+ 274              		.loc 1 146 12 is_stmt 0 view .LVU86
+ 275 0000 064B     		ldr	r3, .L15
+ 276 0002 5B69     		ldr	r3, [r3, #20]
+ 277              		.loc 1 146 6 view .LVU87
+ 278 0004 13F0200F 		tst	r3, #32
+ 279 0008 04D0     		beq	.L13
+ 147:../application/src/main.c ****     GPIOA->BSRR = (1 << (5 + 16));        /* 复位 PA5 */
+ 280              		.loc 1 147 5 is_stmt 1 view .LVU88
+ 281              		.loc 1 147 17 is_stmt 0 view .LVU89
+ 282 000a 044B     		ldr	r3, .L15
+ 283 000c 4FF40012 		mov	r2, #2097152
+ 284 0010 9A61     		str	r2, [r3, #24]
+ 285 0012 7047     		bx	lr
+ 286              	.L13:
+ 148:../application/src/main.c ****   } else {
+ 149:../application/src/main.c ****     GPIOA->BSRR = (1 << 5);               /* 置位 PA5 */
+ 287              		.loc 1 149 5 is_stmt 1 view .LVU90
+ 288              		.loc 1 149 17 is_stmt 0 view .LVU91
+ 289 0014 014B     		ldr	r3, .L15
+ 290 0016 2022     		movs	r2, #32
+ 291 0018 9A61     		str	r2, [r3, #24]
+ 150:../application/src/main.c ****   }
+ 151:../application/src/main.c **** }
+ 292              		.loc 1 151 1 view .LVU92
+ 293 001a 7047     		bx	lr
+ 294              	.L16:
+ 295              		.align	2
+ 296              	.L15:
+ 297 001c 00000240 		.word	1073872896
+ 298              		.cfi_endproc
+ 299              	.LFE127:
+ 301              		.section	.text.delay_ms,"ax",%progbits
+ 302              		.align	1
+ 303              		.global	delay_ms
+ 304              		.syntax unified
+ 305              		.thumb
+ 306              		.thumb_func
+ 308              	delay_ms:
+ 309              	.LVL1:
+ 310              	.LFB128:
+ 152:../application/src/main.c **** 
+ 153:../application/src/main.c **** /**
+ 154:../application/src/main.c ****   * @brief  简单延时函数
+ 155:../application/src/main.c ****   * @param  ms: 延时时间（毫秒）
+ARM GAS  /tmp/ccVzmrR0.s 			page 9
+
+
+ 156:../application/src/main.c ****   * @retval 无
+ 157:../application/src/main.c ****   */
+ 158:../application/src/main.c **** void delay_ms(uint32_t ms)
+ 159:../application/src/main.c **** {
+ 311              		.loc 1 159 1 is_stmt 1 view -0
+ 312              		.cfi_startproc
+ 313              		@ args = 0, pretend = 0, frame = 8
+ 314              		@ frame_needed = 0, uses_anonymous_args = 0
+ 315              		@ link register save eliminated.
+ 316              		.loc 1 159 1 is_stmt 0 view .LVU94
+ 317 0000 82B0     		sub	sp, sp, #8
+ 318              	.LCFI1:
+ 319              		.cfi_def_cfa_offset 8
+ 160:../application/src/main.c ****   /* 简单忙等待延时 */
+ 161:../application/src/main.c ****   /* 在 16MHz HSI 下：每毫秒约 16000 个周期 */
+ 162:../application/src/main.c ****   volatile uint32_t count;
+ 320              		.loc 1 162 3 is_stmt 1 view .LVU95
+ 163:../application/src/main.c ****   volatile uint32_t i;
+ 321              		.loc 1 163 3 view .LVU96
+ 164:../application/src/main.c ****   
+ 165:../application/src/main.c ****   count = ms * 1600;
+ 322              		.loc 1 165 3 view .LVU97
+ 323              		.loc 1 165 14 is_stmt 0 view .LVU98
+ 324 0002 4FF4C863 		mov	r3, #1600
+ 325 0006 03FB00F0 		mul	r0, r3, r0
+ 326              	.LVL2:
+ 327              		.loc 1 165 9 view .LVU99
+ 328 000a 0190     		str	r0, [sp, #4]
+ 166:../application/src/main.c ****   
+ 167:../application/src/main.c ****   for (i = 0; i < count; i++) {
+ 329              		.loc 1 167 3 is_stmt 1 view .LVU100
+ 330              		.loc 1 167 10 is_stmt 0 view .LVU101
+ 331 000c 0023     		movs	r3, #0
+ 332 000e 0093     		str	r3, [sp]
+ 333              		.loc 1 167 3 view .LVU102
+ 334 0010 03E0     		b	.L18
+ 335              	.L19:
+ 168:../application/src/main.c ****     __NOP();
+ 336              		.loc 1 168 5 is_stmt 1 view .LVU103
+ 337              	.LBB8:
+ 338              	.LBI8:
+ 339              		.file 2 "../common/cmsis/core/cmsis_gcc.h"
+   1:../common/cmsis/core/cmsis_gcc.h **** /**************************************************************************//**
+   2:../common/cmsis/core/cmsis_gcc.h ****  * @file     cmsis_gcc.h
+   3:../common/cmsis/core/cmsis_gcc.h ****  * @brief    CMSIS Cortex-M Core Function/Instruction Header File
+   4:../common/cmsis/core/cmsis_gcc.h ****  * @version  V4.30
+   5:../common/cmsis/core/cmsis_gcc.h ****  * @date     20. October 2015
+   6:../common/cmsis/core/cmsis_gcc.h ****  ******************************************************************************/
+   7:../common/cmsis/core/cmsis_gcc.h **** /* Copyright (c) 2009 - 2015 ARM LIMITED
+   8:../common/cmsis/core/cmsis_gcc.h **** 
+   9:../common/cmsis/core/cmsis_gcc.h ****    All rights reserved.
+  10:../common/cmsis/core/cmsis_gcc.h ****    Redistribution and use in source and binary forms, with or without
+  11:../common/cmsis/core/cmsis_gcc.h ****    modification, are permitted provided that the following conditions are met:
+  12:../common/cmsis/core/cmsis_gcc.h ****    - Redistributions of source code must retain the above copyright
+  13:../common/cmsis/core/cmsis_gcc.h ****      notice, this list of conditions and the following disclaimer.
+  14:../common/cmsis/core/cmsis_gcc.h ****    - Redistributions in binary form must reproduce the above copyright
+  15:../common/cmsis/core/cmsis_gcc.h ****      notice, this list of conditions and the following disclaimer in the
+ARM GAS  /tmp/ccVzmrR0.s 			page 10
+
+
+  16:../common/cmsis/core/cmsis_gcc.h ****      documentation and/or other materials provided with the distribution.
+  17:../common/cmsis/core/cmsis_gcc.h ****    - Neither the name of ARM nor the names of its contributors may be used
+  18:../common/cmsis/core/cmsis_gcc.h ****      to endorse or promote products derived from this software without
+  19:../common/cmsis/core/cmsis_gcc.h ****      specific prior written permission.
+  20:../common/cmsis/core/cmsis_gcc.h ****    *
+  21:../common/cmsis/core/cmsis_gcc.h ****    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  22:../common/cmsis/core/cmsis_gcc.h ****    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  23:../common/cmsis/core/cmsis_gcc.h ****    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  24:../common/cmsis/core/cmsis_gcc.h ****    ARE DISCLAIMED. IN NO EVENT SHALL COPYRIGHT HOLDERS AND CONTRIBUTORS BE
+  25:../common/cmsis/core/cmsis_gcc.h ****    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  26:../common/cmsis/core/cmsis_gcc.h ****    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  27:../common/cmsis/core/cmsis_gcc.h ****    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  28:../common/cmsis/core/cmsis_gcc.h ****    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  29:../common/cmsis/core/cmsis_gcc.h ****    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  30:../common/cmsis/core/cmsis_gcc.h ****    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  31:../common/cmsis/core/cmsis_gcc.h ****    POSSIBILITY OF SUCH DAMAGE.
+  32:../common/cmsis/core/cmsis_gcc.h ****    ---------------------------------------------------------------------------*/
+  33:../common/cmsis/core/cmsis_gcc.h **** 
+  34:../common/cmsis/core/cmsis_gcc.h **** 
+  35:../common/cmsis/core/cmsis_gcc.h **** #ifndef __CMSIS_GCC_H
+  36:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_H
+  37:../common/cmsis/core/cmsis_gcc.h **** 
+  38:../common/cmsis/core/cmsis_gcc.h **** /* ignore some GCC warnings */
+  39:../common/cmsis/core/cmsis_gcc.h **** #if defined ( __GNUC__ )
+  40:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic push
+  41:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic ignored "-Wsign-conversion"
+  42:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic ignored "-Wconversion"
+  43:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic ignored "-Wunused-parameter"
+  44:../common/cmsis/core/cmsis_gcc.h **** #endif
+  45:../common/cmsis/core/cmsis_gcc.h **** 
+  46:../common/cmsis/core/cmsis_gcc.h **** 
+  47:../common/cmsis/core/cmsis_gcc.h **** /* ###########################  Core Function Access  ########################### */
+  48:../common/cmsis/core/cmsis_gcc.h **** /** \ingroup  CMSIS_Core_FunctionInterface
+  49:../common/cmsis/core/cmsis_gcc.h ****     \defgroup CMSIS_Core_RegAccFunctions CMSIS Core Register Access Functions
+  50:../common/cmsis/core/cmsis_gcc.h ****   @{
+  51:../common/cmsis/core/cmsis_gcc.h ****  */
+  52:../common/cmsis/core/cmsis_gcc.h **** 
+  53:../common/cmsis/core/cmsis_gcc.h **** /**
+  54:../common/cmsis/core/cmsis_gcc.h ****   \brief   Enable IRQ Interrupts
+  55:../common/cmsis/core/cmsis_gcc.h ****   \details Enables IRQ interrupts by clearing the I-bit in the CPSR.
+  56:../common/cmsis/core/cmsis_gcc.h ****            Can only be executed in Privileged modes.
+  57:../common/cmsis/core/cmsis_gcc.h ****  */
+  58:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __enable_irq(void)
+  59:../common/cmsis/core/cmsis_gcc.h **** {
+  60:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsie i" : : : "memory");
+  61:../common/cmsis/core/cmsis_gcc.h **** }
+  62:../common/cmsis/core/cmsis_gcc.h **** 
+  63:../common/cmsis/core/cmsis_gcc.h **** 
+  64:../common/cmsis/core/cmsis_gcc.h **** /**
+  65:../common/cmsis/core/cmsis_gcc.h ****   \brief   Disable IRQ Interrupts
+  66:../common/cmsis/core/cmsis_gcc.h ****   \details Disables IRQ interrupts by setting the I-bit in the CPSR.
+  67:../common/cmsis/core/cmsis_gcc.h ****   Can only be executed in Privileged modes.
+  68:../common/cmsis/core/cmsis_gcc.h ****  */
+  69:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __disable_irq(void)
+  70:../common/cmsis/core/cmsis_gcc.h **** {
+  71:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsid i" : : : "memory");
+  72:../common/cmsis/core/cmsis_gcc.h **** }
+ARM GAS  /tmp/ccVzmrR0.s 			page 11
+
+
+  73:../common/cmsis/core/cmsis_gcc.h **** 
+  74:../common/cmsis/core/cmsis_gcc.h **** 
+  75:../common/cmsis/core/cmsis_gcc.h **** /**
+  76:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Control Register
+  77:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the Control Register.
+  78:../common/cmsis/core/cmsis_gcc.h ****   \return               Control Register value
+  79:../common/cmsis/core/cmsis_gcc.h ****  */
+  80:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_CONTROL(void)
+  81:../common/cmsis/core/cmsis_gcc.h **** {
+  82:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+  83:../common/cmsis/core/cmsis_gcc.h **** 
+  84:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, control" : "=r" (result) );
+  85:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+  86:../common/cmsis/core/cmsis_gcc.h **** }
+  87:../common/cmsis/core/cmsis_gcc.h **** 
+  88:../common/cmsis/core/cmsis_gcc.h **** 
+  89:../common/cmsis/core/cmsis_gcc.h **** /**
+  90:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Control Register
+  91:../common/cmsis/core/cmsis_gcc.h ****   \details Writes the given value to the Control Register.
+  92:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    control  Control Register value to set
+  93:../common/cmsis/core/cmsis_gcc.h ****  */
+  94:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_CONTROL(uint32_t control)
+  95:../common/cmsis/core/cmsis_gcc.h **** {
+  96:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR control, %0" : : "r" (control) : "memory");
+  97:../common/cmsis/core/cmsis_gcc.h **** }
+  98:../common/cmsis/core/cmsis_gcc.h **** 
+  99:../common/cmsis/core/cmsis_gcc.h **** 
+ 100:../common/cmsis/core/cmsis_gcc.h **** /**
+ 101:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get IPSR Register
+ 102:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the IPSR Register.
+ 103:../common/cmsis/core/cmsis_gcc.h ****   \return               IPSR Register value
+ 104:../common/cmsis/core/cmsis_gcc.h ****  */
+ 105:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_IPSR(void)
+ 106:../common/cmsis/core/cmsis_gcc.h **** {
+ 107:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 108:../common/cmsis/core/cmsis_gcc.h **** 
+ 109:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, ipsr" : "=r" (result) );
+ 110:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 111:../common/cmsis/core/cmsis_gcc.h **** }
+ 112:../common/cmsis/core/cmsis_gcc.h **** 
+ 113:../common/cmsis/core/cmsis_gcc.h **** 
+ 114:../common/cmsis/core/cmsis_gcc.h **** /**
+ 115:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get APSR Register
+ 116:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the APSR Register.
+ 117:../common/cmsis/core/cmsis_gcc.h ****   \return               APSR Register value
+ 118:../common/cmsis/core/cmsis_gcc.h ****  */
+ 119:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_APSR(void)
+ 120:../common/cmsis/core/cmsis_gcc.h **** {
+ 121:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 122:../common/cmsis/core/cmsis_gcc.h **** 
+ 123:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, apsr" : "=r" (result) );
+ 124:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 125:../common/cmsis/core/cmsis_gcc.h **** }
+ 126:../common/cmsis/core/cmsis_gcc.h **** 
+ 127:../common/cmsis/core/cmsis_gcc.h **** 
+ 128:../common/cmsis/core/cmsis_gcc.h **** /**
+ 129:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get xPSR Register
+ARM GAS  /tmp/ccVzmrR0.s 			page 12
+
+
+ 130:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the xPSR Register.
+ 131:../common/cmsis/core/cmsis_gcc.h **** 
+ 132:../common/cmsis/core/cmsis_gcc.h ****     \return               xPSR Register value
+ 133:../common/cmsis/core/cmsis_gcc.h ****  */
+ 134:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_xPSR(void)
+ 135:../common/cmsis/core/cmsis_gcc.h **** {
+ 136:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 137:../common/cmsis/core/cmsis_gcc.h **** 
+ 138:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, xpsr" : "=r" (result) );
+ 139:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 140:../common/cmsis/core/cmsis_gcc.h **** }
+ 141:../common/cmsis/core/cmsis_gcc.h **** 
+ 142:../common/cmsis/core/cmsis_gcc.h **** 
+ 143:../common/cmsis/core/cmsis_gcc.h **** /**
+ 144:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Process Stack Pointer
+ 145:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Process Stack Pointer (PSP).
+ 146:../common/cmsis/core/cmsis_gcc.h ****   \return               PSP Register value
+ 147:../common/cmsis/core/cmsis_gcc.h ****  */
+ 148:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_PSP(void)
+ 149:../common/cmsis/core/cmsis_gcc.h **** {
+ 150:../common/cmsis/core/cmsis_gcc.h ****   register uint32_t result;
+ 151:../common/cmsis/core/cmsis_gcc.h **** 
+ 152:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, psp\n"  : "=r" (result) );
+ 153:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 154:../common/cmsis/core/cmsis_gcc.h **** }
+ 155:../common/cmsis/core/cmsis_gcc.h **** 
+ 156:../common/cmsis/core/cmsis_gcc.h **** 
+ 157:../common/cmsis/core/cmsis_gcc.h **** /**
+ 158:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Process Stack Pointer
+ 159:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Process Stack Pointer (PSP).
+ 160:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    topOfProcStack  Process Stack Pointer value to set
+ 161:../common/cmsis/core/cmsis_gcc.h ****  */
+ 162:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_PSP(uint32_t topOfProcStack)
+ 163:../common/cmsis/core/cmsis_gcc.h **** {
+ 164:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR psp, %0\n" : : "r" (topOfProcStack) );
+ 165:../common/cmsis/core/cmsis_gcc.h **** }
+ 166:../common/cmsis/core/cmsis_gcc.h **** 
+ 167:../common/cmsis/core/cmsis_gcc.h **** 
+ 168:../common/cmsis/core/cmsis_gcc.h **** /**
+ 169:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Main Stack Pointer
+ 170:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Main Stack Pointer (MSP).
+ 171:../common/cmsis/core/cmsis_gcc.h ****   \return               MSP Register value
+ 172:../common/cmsis/core/cmsis_gcc.h ****  */
+ 173:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_MSP(void)
+ 174:../common/cmsis/core/cmsis_gcc.h **** {
+ 175:../common/cmsis/core/cmsis_gcc.h ****   register uint32_t result;
+ 176:../common/cmsis/core/cmsis_gcc.h **** 
+ 177:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, msp\n" : "=r" (result) );
+ 178:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 179:../common/cmsis/core/cmsis_gcc.h **** }
+ 180:../common/cmsis/core/cmsis_gcc.h **** 
+ 181:../common/cmsis/core/cmsis_gcc.h **** 
+ 182:../common/cmsis/core/cmsis_gcc.h **** /**
+ 183:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Main Stack Pointer
+ 184:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Main Stack Pointer (MSP).
+ 185:../common/cmsis/core/cmsis_gcc.h **** 
+ 186:../common/cmsis/core/cmsis_gcc.h ****     \param [in]    topOfMainStack  Main Stack Pointer value to set
+ARM GAS  /tmp/ccVzmrR0.s 			page 13
+
+
+ 187:../common/cmsis/core/cmsis_gcc.h ****  */
+ 188:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_MSP(uint32_t topOfMainStack)
+ 189:../common/cmsis/core/cmsis_gcc.h **** {
+ 190:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR msp, %0\n" : : "r" (topOfMainStack) );
+ 191:../common/cmsis/core/cmsis_gcc.h **** }
+ 192:../common/cmsis/core/cmsis_gcc.h **** 
+ 193:../common/cmsis/core/cmsis_gcc.h **** 
+ 194:../common/cmsis/core/cmsis_gcc.h **** /**
+ 195:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Priority Mask
+ 196:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current state of the priority mask bit from the Priority Mask Register.
+ 197:../common/cmsis/core/cmsis_gcc.h ****   \return               Priority Mask value
+ 198:../common/cmsis/core/cmsis_gcc.h ****  */
+ 199:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_PRIMASK(void)
+ 200:../common/cmsis/core/cmsis_gcc.h **** {
+ 201:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 202:../common/cmsis/core/cmsis_gcc.h **** 
+ 203:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, primask" : "=r" (result) );
+ 204:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 205:../common/cmsis/core/cmsis_gcc.h **** }
+ 206:../common/cmsis/core/cmsis_gcc.h **** 
+ 207:../common/cmsis/core/cmsis_gcc.h **** 
+ 208:../common/cmsis/core/cmsis_gcc.h **** /**
+ 209:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Priority Mask
+ 210:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Priority Mask Register.
+ 211:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    priMask  Priority Mask
+ 212:../common/cmsis/core/cmsis_gcc.h ****  */
+ 213:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_PRIMASK(uint32_t priMask)
+ 214:../common/cmsis/core/cmsis_gcc.h **** {
+ 215:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR primask, %0" : : "r" (priMask) : "memory");
+ 216:../common/cmsis/core/cmsis_gcc.h **** }
+ 217:../common/cmsis/core/cmsis_gcc.h **** 
+ 218:../common/cmsis/core/cmsis_gcc.h **** 
+ 219:../common/cmsis/core/cmsis_gcc.h **** #if       (__CORTEX_M >= 0x03U)
+ 220:../common/cmsis/core/cmsis_gcc.h **** 
+ 221:../common/cmsis/core/cmsis_gcc.h **** /**
+ 222:../common/cmsis/core/cmsis_gcc.h ****   \brief   Enable FIQ
+ 223:../common/cmsis/core/cmsis_gcc.h ****   \details Enables FIQ interrupts by clearing the F-bit in the CPSR.
+ 224:../common/cmsis/core/cmsis_gcc.h ****            Can only be executed in Privileged modes.
+ 225:../common/cmsis/core/cmsis_gcc.h ****  */
+ 226:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __enable_fault_irq(void)
+ 227:../common/cmsis/core/cmsis_gcc.h **** {
+ 228:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsie f" : : : "memory");
+ 229:../common/cmsis/core/cmsis_gcc.h **** }
+ 230:../common/cmsis/core/cmsis_gcc.h **** 
+ 231:../common/cmsis/core/cmsis_gcc.h **** 
+ 232:../common/cmsis/core/cmsis_gcc.h **** /**
+ 233:../common/cmsis/core/cmsis_gcc.h ****   \brief   Disable FIQ
+ 234:../common/cmsis/core/cmsis_gcc.h ****   \details Disables FIQ interrupts by setting the F-bit in the CPSR.
+ 235:../common/cmsis/core/cmsis_gcc.h ****            Can only be executed in Privileged modes.
+ 236:../common/cmsis/core/cmsis_gcc.h ****  */
+ 237:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __disable_fault_irq(void)
+ 238:../common/cmsis/core/cmsis_gcc.h **** {
+ 239:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsid f" : : : "memory");
+ 240:../common/cmsis/core/cmsis_gcc.h **** }
+ 241:../common/cmsis/core/cmsis_gcc.h **** 
+ 242:../common/cmsis/core/cmsis_gcc.h **** 
+ 243:../common/cmsis/core/cmsis_gcc.h **** /**
+ARM GAS  /tmp/ccVzmrR0.s 			page 14
+
+
+ 244:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Base Priority
+ 245:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Base Priority register.
+ 246:../common/cmsis/core/cmsis_gcc.h ****   \return               Base Priority register value
+ 247:../common/cmsis/core/cmsis_gcc.h ****  */
+ 248:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_BASEPRI(void)
+ 249:../common/cmsis/core/cmsis_gcc.h **** {
+ 250:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 251:../common/cmsis/core/cmsis_gcc.h **** 
+ 252:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, basepri" : "=r" (result) );
+ 253:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 254:../common/cmsis/core/cmsis_gcc.h **** }
+ 255:../common/cmsis/core/cmsis_gcc.h **** 
+ 256:../common/cmsis/core/cmsis_gcc.h **** 
+ 257:../common/cmsis/core/cmsis_gcc.h **** /**
+ 258:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Base Priority
+ 259:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Base Priority register.
+ 260:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    basePri  Base Priority value to set
+ 261:../common/cmsis/core/cmsis_gcc.h ****  */
+ 262:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_BASEPRI(uint32_t value)
+ 263:../common/cmsis/core/cmsis_gcc.h **** {
+ 264:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR basepri, %0" : : "r" (value) : "memory");
+ 265:../common/cmsis/core/cmsis_gcc.h **** }
+ 266:../common/cmsis/core/cmsis_gcc.h **** 
+ 267:../common/cmsis/core/cmsis_gcc.h **** 
+ 268:../common/cmsis/core/cmsis_gcc.h **** /**
+ 269:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Base Priority with condition
+ 270:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Base Priority register only if BASEPRI masking is disable
+ 271:../common/cmsis/core/cmsis_gcc.h ****            or the new value increases the BASEPRI priority level.
+ 272:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    basePri  Base Priority value to set
+ 273:../common/cmsis/core/cmsis_gcc.h ****  */
+ 274:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_BASEPRI_MAX(uint32_t value)
+ 275:../common/cmsis/core/cmsis_gcc.h **** {
+ 276:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR basepri_max, %0" : : "r" (value) : "memory");
+ 277:../common/cmsis/core/cmsis_gcc.h **** }
+ 278:../common/cmsis/core/cmsis_gcc.h **** 
+ 279:../common/cmsis/core/cmsis_gcc.h **** 
+ 280:../common/cmsis/core/cmsis_gcc.h **** /**
+ 281:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Fault Mask
+ 282:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Fault Mask register.
+ 283:../common/cmsis/core/cmsis_gcc.h ****   \return               Fault Mask register value
+ 284:../common/cmsis/core/cmsis_gcc.h ****  */
+ 285:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_FAULTMASK(void)
+ 286:../common/cmsis/core/cmsis_gcc.h **** {
+ 287:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 288:../common/cmsis/core/cmsis_gcc.h **** 
+ 289:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, faultmask" : "=r" (result) );
+ 290:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 291:../common/cmsis/core/cmsis_gcc.h **** }
+ 292:../common/cmsis/core/cmsis_gcc.h **** 
+ 293:../common/cmsis/core/cmsis_gcc.h **** 
+ 294:../common/cmsis/core/cmsis_gcc.h **** /**
+ 295:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Fault Mask
+ 296:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Fault Mask register.
+ 297:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    faultMask  Fault Mask value to set
+ 298:../common/cmsis/core/cmsis_gcc.h ****  */
+ 299:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_FAULTMASK(uint32_t faultMask)
+ 300:../common/cmsis/core/cmsis_gcc.h **** {
+ARM GAS  /tmp/ccVzmrR0.s 			page 15
+
+
+ 301:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR faultmask, %0" : : "r" (faultMask) : "memory");
+ 302:../common/cmsis/core/cmsis_gcc.h **** }
+ 303:../common/cmsis/core/cmsis_gcc.h **** 
+ 304:../common/cmsis/core/cmsis_gcc.h **** #endif /* (__CORTEX_M >= 0x03U) */
+ 305:../common/cmsis/core/cmsis_gcc.h **** 
+ 306:../common/cmsis/core/cmsis_gcc.h **** 
+ 307:../common/cmsis/core/cmsis_gcc.h **** #if       (__CORTEX_M == 0x04U) || (__CORTEX_M == 0x07U)
+ 308:../common/cmsis/core/cmsis_gcc.h **** 
+ 309:../common/cmsis/core/cmsis_gcc.h **** /**
+ 310:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get FPSCR
+ 311:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Floating Point Status/Control register.
+ 312:../common/cmsis/core/cmsis_gcc.h ****   \return               Floating Point Status/Control register value
+ 313:../common/cmsis/core/cmsis_gcc.h ****  */
+ 314:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_FPSCR(void)
+ 315:../common/cmsis/core/cmsis_gcc.h **** {
+ 316:../common/cmsis/core/cmsis_gcc.h **** #if (__FPU_PRESENT == 1U) && (__FPU_USED == 1U)
+ 317:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 318:../common/cmsis/core/cmsis_gcc.h **** 
+ 319:../common/cmsis/core/cmsis_gcc.h ****   /* Empty asm statement works as a scheduling barrier */
+ 320:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ 321:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("VMRS %0, fpscr" : "=r" (result) );
+ 322:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ 323:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 324:../common/cmsis/core/cmsis_gcc.h **** #else
+ 325:../common/cmsis/core/cmsis_gcc.h ****    return(0);
+ 326:../common/cmsis/core/cmsis_gcc.h **** #endif
+ 327:../common/cmsis/core/cmsis_gcc.h **** }
+ 328:../common/cmsis/core/cmsis_gcc.h **** 
+ 329:../common/cmsis/core/cmsis_gcc.h **** 
+ 330:../common/cmsis/core/cmsis_gcc.h **** /**
+ 331:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set FPSCR
+ 332:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Floating Point Status/Control register.
+ 333:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    fpscr  Floating Point Status/Control value to set
+ 334:../common/cmsis/core/cmsis_gcc.h ****  */
+ 335:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_FPSCR(uint32_t fpscr)
+ 336:../common/cmsis/core/cmsis_gcc.h **** {
+ 337:../common/cmsis/core/cmsis_gcc.h **** #if (__FPU_PRESENT == 1U) && (__FPU_USED == 1U)
+ 338:../common/cmsis/core/cmsis_gcc.h ****   /* Empty asm statement works as a scheduling barrier */
+ 339:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ 340:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("VMSR fpscr, %0" : : "r" (fpscr) : "vfpcc");
+ 341:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ 342:../common/cmsis/core/cmsis_gcc.h **** #endif
+ 343:../common/cmsis/core/cmsis_gcc.h **** }
+ 344:../common/cmsis/core/cmsis_gcc.h **** 
+ 345:../common/cmsis/core/cmsis_gcc.h **** #endif /* (__CORTEX_M == 0x04U) || (__CORTEX_M == 0x07U) */
+ 346:../common/cmsis/core/cmsis_gcc.h **** 
+ 347:../common/cmsis/core/cmsis_gcc.h **** 
+ 348:../common/cmsis/core/cmsis_gcc.h **** 
+ 349:../common/cmsis/core/cmsis_gcc.h **** /*@} end of CMSIS_Core_RegAccFunctions */
+ 350:../common/cmsis/core/cmsis_gcc.h **** 
+ 351:../common/cmsis/core/cmsis_gcc.h **** 
+ 352:../common/cmsis/core/cmsis_gcc.h **** /* ##########################  Core Instruction Access  ######################### */
+ 353:../common/cmsis/core/cmsis_gcc.h **** /** \defgroup CMSIS_Core_InstructionInterface CMSIS Core Instruction Interface
+ 354:../common/cmsis/core/cmsis_gcc.h ****   Access to dedicated instructions
+ 355:../common/cmsis/core/cmsis_gcc.h ****   @{
+ 356:../common/cmsis/core/cmsis_gcc.h **** */
+ 357:../common/cmsis/core/cmsis_gcc.h **** 
+ARM GAS  /tmp/ccVzmrR0.s 			page 16
+
+
+ 358:../common/cmsis/core/cmsis_gcc.h **** /* Define macros for porting to both thumb1 and thumb2.
+ 359:../common/cmsis/core/cmsis_gcc.h ****  * For thumb1, use low register (r0-r7), specified by constraint "l"
+ 360:../common/cmsis/core/cmsis_gcc.h ****  * Otherwise, use general registers, specified by constraint "r" */
+ 361:../common/cmsis/core/cmsis_gcc.h **** #if defined (__thumb__) && !defined (__thumb2__)
+ 362:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_OUT_REG(r) "=l" (r)
+ 363:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_USE_REG(r) "l" (r)
+ 364:../common/cmsis/core/cmsis_gcc.h **** #else
+ 365:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_OUT_REG(r) "=r" (r)
+ 366:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_USE_REG(r) "r" (r)
+ 367:../common/cmsis/core/cmsis_gcc.h **** #endif
+ 368:../common/cmsis/core/cmsis_gcc.h **** 
+ 369:../common/cmsis/core/cmsis_gcc.h **** /**
+ 370:../common/cmsis/core/cmsis_gcc.h ****   \brief   No Operation
+ 371:../common/cmsis/core/cmsis_gcc.h ****   \details No Operation does nothing. This instruction can be used for code alignment purposes.
+ 372:../common/cmsis/core/cmsis_gcc.h ****  */
+ 373:../common/cmsis/core/cmsis_gcc.h **** __attribute__((always_inline)) __STATIC_INLINE void __NOP(void)
+ 340              		.loc 2 373 53 view .LVU104
+ 341              	.LBB9:
+ 374:../common/cmsis/core/cmsis_gcc.h **** {
+ 375:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("nop");
+ 342              		.loc 2 375 3 view .LVU105
+ 343              		.syntax unified
+ 344              	@ 375 "../common/cmsis/core/cmsis_gcc.h" 1
+ 345 0012 00BF     		nop
+ 346              	@ 0 "" 2
+ 347              		.thumb
+ 348              		.syntax unified
+ 349              	.LBE9:
+ 350              	.LBE8:
+ 167:../application/src/main.c ****     __NOP();
+ 351              		.loc 1 167 27 discriminator 3 view .LVU106
+ 352 0014 009B     		ldr	r3, [sp]
+ 353 0016 0133     		adds	r3, r3, #1
+ 354 0018 0093     		str	r3, [sp]
+ 355              	.L18:
+ 167:../application/src/main.c ****     __NOP();
+ 356              		.loc 1 167 17 discriminator 1 view .LVU107
+ 357 001a 009A     		ldr	r2, [sp]
+ 358 001c 019B     		ldr	r3, [sp, #4]
+ 359 001e 9A42     		cmp	r2, r3
+ 360 0020 F7D3     		bcc	.L19
+ 169:../application/src/main.c ****   }
+ 170:../application/src/main.c **** }
+ 361              		.loc 1 170 1 is_stmt 0 view .LVU108
+ 362 0022 02B0     		add	sp, sp, #8
+ 363              	.LCFI2:
+ 364              		.cfi_def_cfa_offset 0
+ 365              		@ sp needed
+ 366 0024 7047     		bx	lr
+ 367              		.cfi_endproc
+ 368              	.LFE128:
+ 370              		.section	.text.main,"ax",%progbits
+ 371              		.align	1
+ 372              		.global	main
+ 373              		.syntax unified
+ 374              		.thumb
+ 375              		.thumb_func
+ARM GAS  /tmp/ccVzmrR0.s 			page 17
+
+
+ 377              	main:
+ 378              	.LFB123:
+  20:../application/src/main.c ****   /* 将向量表重定位到应用区（重要！） */
+ 379              		.loc 1 20 1 is_stmt 1 view -0
+ 380              		.cfi_startproc
+ 381              		@ Volatile: function does not return.
+ 382              		@ args = 0, pretend = 0, frame = 0
+ 383              		@ frame_needed = 0, uses_anonymous_args = 0
+ 384 0000 08B5     		push	{r3, lr}
+ 385              	.LCFI3:
+ 386              		.cfi_def_cfa_offset 8
+ 387              		.cfi_offset 3, -8
+ 388              		.cfi_offset 14, -4
+  23:../application/src/main.c ****   SCB->VTOR = 0x08010000;  /* 应用程序向量表偏移地址 */
+ 389              		.loc 1 23 3 view .LVU110
+ 390              	.LBB10:
+ 391              	.LBI10:
+  69:../common/cmsis/core/cmsis_gcc.h **** {
+ 392              		.loc 2 69 57 view .LVU111
+ 393              	.LBB11:
+  71:../common/cmsis/core/cmsis_gcc.h **** }
+ 394              		.loc 2 71 3 view .LVU112
+ 395              		.syntax unified
+ 396              	@ 71 "../common/cmsis/core/cmsis_gcc.h" 1
+ 397 0002 72B6     		cpsid i
+ 398              	@ 0 "" 2
+ 399              		.thumb
+ 400              		.syntax unified
+ 401              	.LBE11:
+ 402              	.LBE10:
+  24:../application/src/main.c ****   __enable_irq();
+ 403              		.loc 1 24 3 view .LVU113
+  24:../application/src/main.c ****   __enable_irq();
+ 404              		.loc 1 24 13 is_stmt 0 view .LVU114
+ 405 0004 074B     		ldr	r3, .L24
+ 406 0006 084A     		ldr	r2, .L24+4
+ 407 0008 9A60     		str	r2, [r3, #8]
+  25:../application/src/main.c ****   
+ 408              		.loc 1 25 3 is_stmt 1 view .LVU115
+ 409              	.LBB12:
+ 410              	.LBI12:
+  58:../common/cmsis/core/cmsis_gcc.h **** {
+ 411              		.loc 2 58 57 view .LVU116
+ 412              	.LBB13:
+  60:../common/cmsis/core/cmsis_gcc.h **** }
+ 413              		.loc 2 60 3 view .LVU117
+ 414              		.syntax unified
+ 415              	@ 60 "../common/cmsis/core/cmsis_gcc.h" 1
+ 416 000a 62B6     		cpsie i
+ 417              	@ 0 "" 2
+ 418              		.thumb
+ 419              		.syntax unified
+ 420              	.LBE13:
+ 421              	.LBE12:
+  28:../application/src/main.c ****   
+ 422              		.loc 1 28 3 view .LVU118
+ 423 000c FFF7FEFF 		bl	system_init
+ARM GAS  /tmp/ccVzmrR0.s 			page 18
+
+
+ 424              	.LVL3:
+  31:../application/src/main.c ****   
+ 425              		.loc 1 31 3 view .LVU119
+ 426 0010 FFF7FEFF 		bl	gpio_init
+ 427              	.LVL4:
+ 428              	.L22:
+  37:../application/src/main.c ****     /* 以低于 Bootloader 的频率翻转 LED */
+ 429              		.loc 1 37 3 view .LVU120
+  39:../application/src/main.c ****     delay_ms(LED_BLINK_DELAY_MS);
+ 430              		.loc 1 39 5 view .LVU121
+ 431 0014 FFF7FEFF 		bl	led_toggle
+ 432              	.LVL5:
+  40:../application/src/main.c ****   }
+ 433              		.loc 1 40 5 discriminator 1 view .LVU122
+ 434 0018 4FF4FA70 		mov	r0, #500
+ 435 001c FFF7FEFF 		bl	delay_ms
+ 436              	.LVL6:
+  37:../application/src/main.c ****     /* 以低于 Bootloader 的频率翻转 LED */
+ 437              		.loc 1 37 9 view .LVU123
+ 438 0020 F8E7     		b	.L22
+ 439              	.L25:
+ 440 0022 00BF     		.align	2
+ 441              	.L24:
+ 442 0024 00ED00E0 		.word	-536810240
+ 443 0028 00000108 		.word	134283264
+ 444              		.cfi_endproc
+ 445              	.LFE123:
+ 447              		.section	.text.uart_send_char,"ax",%progbits
+ 448              		.align	1
+ 449              		.global	uart_send_char
+ 450              		.syntax unified
+ 451              		.thumb
+ 452              		.thumb_func
+ 454              	uart_send_char:
+ 455              	.LFB129:
+ 171:../application/src/main.c **** 
+ 172:../application/src/main.c **** /**
+ 173:../application/src/main.c ****   * @brief  通过 UART2 发送单个字符
+ 174:../application/src/main.c ****   * @param  ch: 待发送字符
+ 175:../application/src/main.c ****   * @retval 无
+ 176:../application/src/main.c ****   */
+ 177:../application/src/main.c **** void uart_send_char(uint8_t ch)
+ 178:../application/src/main.c **** {
+ 456              		.loc 1 178 1 view -0
+ 457              		.cfi_startproc
+ 458              		@ args = 0, pretend = 0, frame = 0
+ 459              		@ frame_needed = 0, uses_anonymous_args = 0
+ 460              		@ link register save eliminated.
+ 461              	.LVL7:
+ 462              	.L27:
+ 179:../application/src/main.c ****   /* 等待 TXE 标志置位 */
+ 180:../application/src/main.c ****   while (!(USART2->SR & USART_SR_TXE));
+ 463              		.loc 1 180 10 discriminator 1 view .LVU125
+ 464              		.loc 1 180 18 is_stmt 0 discriminator 1 view .LVU126
+ 465 0000 034B     		ldr	r3, .L28
+ 466 0002 1B68     		ldr	r3, [r3]
+ 467              		.loc 1 180 10 discriminator 1 view .LVU127
+ARM GAS  /tmp/ccVzmrR0.s 			page 19
+
+
+ 468 0004 13F0800F 		tst	r3, #128
+ 469 0008 FAD0     		beq	.L27
+ 181:../application/src/main.c ****   
+ 182:../application/src/main.c ****   /* 发送字符 */
+ 183:../application/src/main.c ****   USART2->DR = ch;
+ 470              		.loc 1 183 3 is_stmt 1 view .LVU128
+ 471              		.loc 1 183 14 is_stmt 0 view .LVU129
+ 472 000a 014B     		ldr	r3, .L28
+ 473 000c 5860     		str	r0, [r3, #4]
+ 184:../application/src/main.c **** }
+ 474              		.loc 1 184 1 view .LVU130
+ 475 000e 7047     		bx	lr
+ 476              	.L29:
+ 477              		.align	2
+ 478              	.L28:
+ 479 0010 00440040 		.word	1073759232
+ 480              		.cfi_endproc
+ 481              	.LFE129:
+ 483              		.section	.text.uart_send_string,"ax",%progbits
+ 484              		.align	1
+ 485              		.global	uart_send_string
+ 486              		.syntax unified
+ 487              		.thumb
+ 488              		.thumb_func
+ 490              	uart_send_string:
+ 491              	.LVL8:
+ 492              	.LFB130:
+ 185:../application/src/main.c **** 
+ 186:../application/src/main.c **** /**
+ 187:../application/src/main.c ****   * @brief  通过 UART2 发送字符串
+ 188:../application/src/main.c ****   * @param  str: 待发送字符串
+ 189:../application/src/main.c ****   * @retval 无
+ 190:../application/src/main.c ****   */
+ 191:../application/src/main.c **** void uart_send_string(const char *str)
+ 192:../application/src/main.c **** {
+ 493              		.loc 1 192 1 is_stmt 1 view -0
+ 494              		.cfi_startproc
+ 495              		@ args = 0, pretend = 0, frame = 0
+ 496              		@ frame_needed = 0, uses_anonymous_args = 0
+ 497              		.loc 1 192 1 is_stmt 0 view .LVU132
+ 498 0000 10B5     		push	{r4, lr}
+ 499              	.LCFI4:
+ 500              		.cfi_def_cfa_offset 8
+ 501              		.cfi_offset 4, -8
+ 502              		.cfi_offset 14, -4
+ 503 0002 0446     		mov	r4, r0
+ 193:../application/src/main.c ****   while (*str) {
+ 504              		.loc 1 193 3 is_stmt 1 view .LVU133
+ 505              		.loc 1 193 9 is_stmt 0 view .LVU134
+ 506 0004 02E0     		b	.L31
+ 507              	.LVL9:
+ 508              	.L32:
+ 194:../application/src/main.c ****     uart_send_char(*str);
+ 509              		.loc 1 194 5 is_stmt 1 view .LVU135
+ 510 0006 FFF7FEFF 		bl	uart_send_char
+ 511              	.LVL10:
+ 195:../application/src/main.c ****     str++;
+ARM GAS  /tmp/ccVzmrR0.s 			page 20
+
+
+ 512              		.loc 1 195 5 view .LVU136
+ 513              		.loc 1 195 8 is_stmt 0 view .LVU137
+ 514 000a 0134     		adds	r4, r4, #1
+ 515              	.LVL11:
+ 516              	.L31:
+ 193:../application/src/main.c ****   while (*str) {
+ 517              		.loc 1 193 10 is_stmt 1 view .LVU138
+ 518 000c 2078     		ldrb	r0, [r4]	@ zero_extendqisi2
+ 519 000e 0028     		cmp	r0, #0
+ 520 0010 F9D1     		bne	.L32
+ 196:../application/src/main.c ****   }
+ 197:../application/src/main.c **** }
+ 521              		.loc 1 197 1 is_stmt 0 view .LVU139
+ 522 0012 10BD     		pop	{r4, pc}
+ 523              		.loc 1 197 1 view .LVU140
+ 524              		.cfi_endproc
+ 525              	.LFE130:
+ 527              		.section	.bss.tick_counter,"aw",%nobits
+ 528              		.align	2
+ 531              	tick_counter:
+ 532 0000 00000000 		.space	4
+ 533              		.text
+ 534              	.Letext0:
+ 535              		.file 3 "/usr/lib/gcc/arm-none-eabi/13.2.1/include/stdint.h"
+ 536              		.file 4 "../common/cmsis/core/core_cm4.h"
+ 537              		.file 5 "../common/cmsis/device/stm32f401xe.h"
+ 538              		.file 6 "../common/cmsis/device/system_stm32f4xx.h"
+ARM GAS  /tmp/ccVzmrR0.s 			page 21
+
+
+DEFINED SYMBOLS
+                            *ABS*:00000000 main.c
+     /tmp/ccVzmrR0.s:21     .text.system_init:00000000 $t
+     /tmp/ccVzmrR0.s:27     .text.system_init:00000000 system_init
+     /tmp/ccVzmrR0.s:69     .text.system_init:00000028 $d
+     /tmp/ccVzmrR0.s:74     .text.gpio_init:00000000 $t
+     /tmp/ccVzmrR0.s:80     .text.gpio_init:00000000 gpio_init
+     /tmp/ccVzmrR0.s:140    .text.gpio_init:00000044 $d
+     /tmp/ccVzmrR0.s:146    .text.uart_init:00000000 $t
+     /tmp/ccVzmrR0.s:152    .text.uart_init:00000000 uart_init
+     /tmp/ccVzmrR0.s:255    .text.uart_init:00000080 $d
+     /tmp/ccVzmrR0.s:260    .text.led_toggle:00000000 $t
+     /tmp/ccVzmrR0.s:266    .text.led_toggle:00000000 led_toggle
+     /tmp/ccVzmrR0.s:297    .text.led_toggle:0000001c $d
+     /tmp/ccVzmrR0.s:302    .text.delay_ms:00000000 $t
+     /tmp/ccVzmrR0.s:308    .text.delay_ms:00000000 delay_ms
+     /tmp/ccVzmrR0.s:371    .text.main:00000000 $t
+     /tmp/ccVzmrR0.s:377    .text.main:00000000 main
+     /tmp/ccVzmrR0.s:442    .text.main:00000024 $d
+     /tmp/ccVzmrR0.s:448    .text.uart_send_char:00000000 $t
+     /tmp/ccVzmrR0.s:454    .text.uart_send_char:00000000 uart_send_char
+     /tmp/ccVzmrR0.s:479    .text.uart_send_char:00000010 $d
+     /tmp/ccVzmrR0.s:484    .text.uart_send_string:00000000 $t
+     /tmp/ccVzmrR0.s:490    .text.uart_send_string:00000000 uart_send_string
+     /tmp/ccVzmrR0.s:528    .bss.tick_counter:00000000 $d
+     /tmp/ccVzmrR0.s:531    .bss.tick_counter:00000000 tick_counter
+
+UNDEFINED SYMBOLS
+SystemCoreClockUpdate

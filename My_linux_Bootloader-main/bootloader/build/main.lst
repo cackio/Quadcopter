@@ -1,0 +1,1293 @@
+ARM GAS  /tmp/ccsvJr7z.s 			page 1
+
+
+   1              		.cpu cortex-m4
+   2              		.arch armv7e-m
+   3              		.fpu fpv4-sp-d16
+   4              		.eabi_attribute 27, 1
+   5              		.eabi_attribute 28, 1
+   6              		.eabi_attribute 20, 1
+   7              		.eabi_attribute 21, 1
+   8              		.eabi_attribute 23, 3
+   9              		.eabi_attribute 24, 1
+  10              		.eabi_attribute 25, 1
+  11              		.eabi_attribute 26, 1
+  12              		.eabi_attribute 30, 1
+  13              		.eabi_attribute 34, 1
+  14              		.eabi_attribute 18, 4
+  15              		.file	"main.c"
+  16              		.text
+  17              	.Ltext0:
+  18              		.cfi_sections	.debug_frame
+  19              		.file 1 "../bootloader/src/main.c"
+  20              		.section	.text.validate_application,"ax",%progbits
+  21              		.align	1
+  22              		.syntax unified
+  23              		.thumb
+  24              		.thumb_func
+  26              	validate_application:
+  27              	.LFB124:
+   1:../bootloader/src/main.c **** /**
+   2:../bootloader/src/main.c ****   ******************************************************************************
+   3:../bootloader/src/main.c ****   * @file    main.c
+   4:../bootloader/src/main.c ****   * @brief   STM32F401 Bootloader 主程序
+   5:../bootloader/src/main.c ****   * @details 该 Bootloader 初始化系统，并在应用程序有效时跳转到位于 0x08010000
+   6:../bootloader/src/main.c ****   *          否则，它将停留在 Bootloader 模式。
+   7:../bootloader/src/main.c ****   ******************************************************************************
+   8:../bootloader/src/main.c ****   */
+   9:../bootloader/src/main.c **** 
+  10:../bootloader/src/main.c **** #include "main.h"
+  11:../bootloader/src/main.c **** 
+  12:../bootloader/src/main.c **** /* 私有函数原型 */
+  13:../bootloader/src/main.c **** static int32_t validate_application(void);
+  14:../bootloader/src/main.c **** static void bootloader_jump_to_app(void);
+  15:../bootloader/src/main.c **** static void bootloader_error_loop(void);
+  16:../bootloader/src/main.c **** 
+  17:../bootloader/src/main.c **** /* 私有变量 */
+  18:../bootloader/src/main.c **** static volatile uint32_t boot_timeout = 0;
+  19:../bootloader/src/main.c **** static volatile uint8_t boot_flag = 0;
+  20:../bootloader/src/main.c **** 
+  21:../bootloader/src/main.c **** /**
+  22:../bootloader/src/main.c ****   * @brief  主程序
+  23:../bootloader/src/main.c ****   * @retval 无
+  24:../bootloader/src/main.c ****   */
+  25:../bootloader/src/main.c **** int main(void)
+  26:../bootloader/src/main.c **** {
+  27:../bootloader/src/main.c ****   /* 初始化系统时钟和外设 */
+  28:../bootloader/src/main.c ****   system_init();
+  29:../bootloader/src/main.c ****   
+  30:../bootloader/src/main.c ****   /* 初始化用于 LED 状态指示的 GPIO */
+  31:../bootloader/src/main.c ****   gpio_init();
+ARM GAS  /tmp/ccsvJr7z.s 			page 2
+
+
+  32:../bootloader/src/main.c ****   
+  33:../bootloader/src/main.c ****   /* 检查应用程序是否有效 */
+  34:../bootloader/src/main.c ****   if (validate_application() == BOOTLOADER_OK) {
+  35:../bootloader/src/main.c ****     /* 应用程序有效，短暂延迟后跳转 */
+  36:../bootloader/src/main.c ****     // App 有效：LED 快闪 1 秒（100ms 间隔 × 10次），然后跳转
+  37:../bootloader/src/main.c ****     boot_timeout = BOOT_TIMEOUT_MS;
+  38:../bootloader/src/main.c ****     
+  39:../bootloader/src/main.c ****     /* 等待超时（LED 快速闪烁） */
+  40:../bootloader/src/main.c ****     while (boot_timeout > 0) {
+  41:../bootloader/src/main.c ****       led_toggle();
+  42:../bootloader/src/main.c ****       delay_ms(100);
+  43:../bootloader/src/main.c ****       boot_timeout -= 100;
+  44:../bootloader/src/main.c ****     }
+  45:../bootloader/src/main.c ****     
+  46:../bootloader/src/main.c ****     /* 跳转到应用程序 */
+  47:../bootloader/src/main.c ****     bootloader_jump_to_app();
+  48:../bootloader/src/main.c ****   } else {
+  49:../bootloader/src/main.c ****     /* 没有有效的应用程序，停留在 Bootloader（LED 常亮） */
+  50:../bootloader/src/main.c ****     // App 无效：LED 常亮，死循环
+  51:../bootloader/src/main.c ****     bootloader_error_loop();
+  52:../bootloader/src/main.c ****   }
+  53:../bootloader/src/main.c ****   
+  54:../bootloader/src/main.c ****   /* 不应到达此处 */
+  55:../bootloader/src/main.c ****   while (1) {
+  56:../bootloader/src/main.c ****     bootloader_error_loop();
+  57:../bootloader/src/main.c ****   }
+  58:../bootloader/src/main.c **** }
+  59:../bootloader/src/main.c **** 
+  60:../bootloader/src/main.c **** /**
+  61:../bootloader/src/main.c ****   * @brief  验证位于 APP_START_ADDR 的应用程序
+  62:../bootloader/src/main.c ****   * @retval 如果应用程序有效则返回 BOOTLOADER_OK，否则返回错误代码
+  63:../bootloader/src/main.c ****   */
+  64:../bootloader/src/main.c **** static int32_t validate_application(void)
+  65:../bootloader/src/main.c **** {
+  28              		.loc 1 65 1 view -0
+  29              		.cfi_startproc
+  30              		@ args = 0, pretend = 0, frame = 0
+  31              		@ frame_needed = 0, uses_anonymous_args = 0
+  32              		@ link register save eliminated.
+  66:../bootloader/src/main.c ****   uint32_t app_stack_ptr;
+  33              		.loc 1 66 3 view .LVU1
+  67:../bootloader/src/main.c ****   uint32_t app_reset_handler;
+  34              		.loc 1 67 3 view .LVU2
+  68:../bootloader/src/main.c ****   
+  69:../bootloader/src/main.c ****   /* 从应用程序向量表读取栈指针 */
+  70:../bootloader/src/main.c ****   app_stack_ptr = *(volatile uint32_t *)(APP_START_ADDR);
+  35              		.loc 1 70 3 view .LVU3
+  36              		.loc 1 70 17 is_stmt 0 view .LVU4
+  37 0000 0E4B     		ldr	r3, .L6
+  38 0002 1A68     		ldr	r2, [r3]
+  39              	.LVL0:
+  71:../bootloader/src/main.c ****   
+  72:../bootloader/src/main.c ****   /* 从应用程序向量表读取复位处理程序 */
+  73:../bootloader/src/main.c ****   app_reset_handler = *(volatile uint32_t *)(APP_START_ADDR + 4);
+  40              		.loc 1 73 3 is_stmt 1 view .LVU5
+  41              		.loc 1 73 21 is_stmt 0 view .LVU6
+  42 0004 5B68     		ldr	r3, [r3, #4]
+ARM GAS  /tmp/ccsvJr7z.s 			page 3
+
+
+  43              	.LVL1:
+  74:../bootloader/src/main.c ****   
+  75:../bootloader/src/main.c ****   /* 验证栈指针是否指向 SRAM */
+  76:../bootloader/src/main.c ****   if (app_stack_ptr < SRAM_BASE || app_stack_ptr > (SRAM_END + 1)) {
+  44              		.loc 1 76 3 is_stmt 1 view .LVU7
+  45              		.loc 1 76 33 is_stmt 0 view .LVU8
+  46 0006 02F16041 		add	r1, r2, #-536870912
+  47              		.loc 1 76 6 view .LVU9
+  48 000a B1F5C03F 		cmp	r1, #98304
+  49 000e 0CD8     		bhi	.L3
+  77:../bootloader/src/main.c ****     return BOOTLOADER_ERR_INVALID_APP;
+  78:../bootloader/src/main.c ****   }
+  79:../bootloader/src/main.c ****   
+  80:../bootloader/src/main.c ****   /* 验证复位处理程序是否指向应用程序 Flash 区域 */
+  81:../bootloader/src/main.c ****   if (app_reset_handler < APP_START_ADDR || app_reset_handler > APP_END_ADDR) {
+  50              		.loc 1 81 3 is_stmt 1 view .LVU10
+  51              		.loc 1 81 42 is_stmt 0 view .LVU11
+  52 0010 03F17743 		add	r3, r3, #-150994944
+  53              	.LVL2:
+  54              		.loc 1 81 42 view .LVU12
+  55 0014 03F57F03 		add	r3, r3, #16711680
+  56              	.LVL3:
+  57              		.loc 1 81 6 view .LVU13
+  58 0018 B3F5E02F 		cmp	r3, #458752
+  59 001c 08D2     		bcs	.L4
+  82:../bootloader/src/main.c ****     return BOOTLOADER_ERR_INVALID_APP;
+  83:../bootloader/src/main.c ****   }
+  84:../bootloader/src/main.c ****   
+  85:../bootloader/src/main.c ****   /* 简单的校验和检查（可选，可增强） */
+  86:../bootloader/src/main.c ****   /* 目前仅检查第一个位置是否不全为 0xFF 或 0x00 */
+  87:../bootloader/src/main.c ****   if (app_stack_ptr == 0xFFFFFFFF || app_stack_ptr == 0x00000000) {
+  60              		.loc 1 87 3 is_stmt 1 view .LVU14
+  61              		.loc 1 87 35 is_stmt 0 view .LVU15
+  62 001e 013A     		subs	r2, r2, #1
+  63              	.LVL4:
+  64              		.loc 1 87 6 view .LVU16
+  65 0020 12F1030F 		cmn	r2, #3
+  66 0024 07D8     		bhi	.L5
+  88:../bootloader/src/main.c ****     return BOOTLOADER_ERR_NO_APP;
+  89:../bootloader/src/main.c ****   }
+  90:../bootloader/src/main.c ****   
+  91:../bootloader/src/main.c ****   return BOOTLOADER_OK;
+  67              		.loc 1 91 10 view .LVU17
+  68 0026 0020     		movs	r0, #0
+  69 0028 7047     		bx	lr
+  70              	.LVL5:
+  71              	.L3:
+  77:../bootloader/src/main.c ****   }
+  72              		.loc 1 77 12 view .LVU18
+  73 002a 6FF00100 		mvn	r0, #1
+  74 002e 7047     		bx	lr
+  75              	.LVL6:
+  76              	.L4:
+  82:../bootloader/src/main.c ****     return BOOTLOADER_ERR_INVALID_APP;
+  77              		.loc 1 82 12 view .LVU19
+  78 0030 6FF00100 		mvn	r0, #1
+  79 0034 7047     		bx	lr
+ARM GAS  /tmp/ccsvJr7z.s 			page 4
+
+
+  80              	.LVL7:
+  81              	.L5:
+  88:../bootloader/src/main.c ****     return BOOTLOADER_ERR_NO_APP;
+  82              		.loc 1 88 12 view .LVU20
+  83 0036 4FF0FF30 		mov	r0, #-1
+  92:../bootloader/src/main.c **** }
+  84              		.loc 1 92 1 view .LVU21
+  85 003a 7047     		bx	lr
+  86              	.L7:
+  87              		.align	2
+  88              	.L6:
+  89 003c 00000108 		.word	134283264
+  90              		.cfi_endproc
+  91              	.LFE124:
+  93              		.section	.text.bootloader_jump_to_app,"ax",%progbits
+  94              		.align	1
+  95              		.syntax unified
+  96              		.thumb
+  97              		.thumb_func
+  99              	bootloader_jump_to_app:
+ 100              	.LFB125:
+  93:../bootloader/src/main.c **** 
+  94:../bootloader/src/main.c **** /**
+  95:../bootloader/src/main.c ****   * @brief  跳转到位于 APP_START_ADDR 的应用程序
+  96:../bootloader/src/main.c ****   * @retval 无
+  97:../bootloader/src/main.c ****   */
+  98:../bootloader/src/main.c **** static void bootloader_jump_to_app(void)
+  99:../bootloader/src/main.c **** {
+ 101              		.loc 1 99 1 is_stmt 1 view -0
+ 102              		.cfi_startproc
+ 103              		@ args = 0, pretend = 0, frame = 0
+ 104              		@ frame_needed = 0, uses_anonymous_args = 0
+ 105 0000 08B5     		push	{r3, lr}
+ 106              	.LCFI0:
+ 107              		.cfi_def_cfa_offset 8
+ 108              		.cfi_offset 3, -8
+ 109              		.cfi_offset 14, -4
+ 100:../bootloader/src/main.c ****   typedef void (*pFunction)(void);
+ 110              		.loc 1 100 3 view .LVU23
+ 101:../bootloader/src/main.c ****   
+ 102:../bootloader/src/main.c ****   uint32_t app_stack_ptr;
+ 111              		.loc 1 102 3 view .LVU24
+ 103:../bootloader/src/main.c ****   uint32_t app_reset_handler;
+ 112              		.loc 1 103 3 view .LVU25
+ 104:../bootloader/src/main.c ****   pFunction app_entry;
+ 113              		.loc 1 104 3 view .LVU26
+ 105:../bootloader/src/main.c ****   
+ 106:../bootloader/src/main.c ****   /* 禁用所有中断 */
+ 107:../bootloader/src/main.c ****   __disable_irq();
+ 114              		.loc 1 107 3 view .LVU27
+ 115              	.LBB10:
+ 116              	.LBI10:
+ 117              		.file 2 "../common/cmsis/core/cmsis_gcc.h"
+   1:../common/cmsis/core/cmsis_gcc.h **** /**************************************************************************//**
+   2:../common/cmsis/core/cmsis_gcc.h ****  * @file     cmsis_gcc.h
+   3:../common/cmsis/core/cmsis_gcc.h ****  * @brief    CMSIS Cortex-M Core Function/Instruction Header File
+   4:../common/cmsis/core/cmsis_gcc.h ****  * @version  V4.30
+ARM GAS  /tmp/ccsvJr7z.s 			page 5
+
+
+   5:../common/cmsis/core/cmsis_gcc.h ****  * @date     20. October 2015
+   6:../common/cmsis/core/cmsis_gcc.h ****  ******************************************************************************/
+   7:../common/cmsis/core/cmsis_gcc.h **** /* Copyright (c) 2009 - 2015 ARM LIMITED
+   8:../common/cmsis/core/cmsis_gcc.h **** 
+   9:../common/cmsis/core/cmsis_gcc.h ****    All rights reserved.
+  10:../common/cmsis/core/cmsis_gcc.h ****    Redistribution and use in source and binary forms, with or without
+  11:../common/cmsis/core/cmsis_gcc.h ****    modification, are permitted provided that the following conditions are met:
+  12:../common/cmsis/core/cmsis_gcc.h ****    - Redistributions of source code must retain the above copyright
+  13:../common/cmsis/core/cmsis_gcc.h ****      notice, this list of conditions and the following disclaimer.
+  14:../common/cmsis/core/cmsis_gcc.h ****    - Redistributions in binary form must reproduce the above copyright
+  15:../common/cmsis/core/cmsis_gcc.h ****      notice, this list of conditions and the following disclaimer in the
+  16:../common/cmsis/core/cmsis_gcc.h ****      documentation and/or other materials provided with the distribution.
+  17:../common/cmsis/core/cmsis_gcc.h ****    - Neither the name of ARM nor the names of its contributors may be used
+  18:../common/cmsis/core/cmsis_gcc.h ****      to endorse or promote products derived from this software without
+  19:../common/cmsis/core/cmsis_gcc.h ****      specific prior written permission.
+  20:../common/cmsis/core/cmsis_gcc.h ****    *
+  21:../common/cmsis/core/cmsis_gcc.h ****    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  22:../common/cmsis/core/cmsis_gcc.h ****    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  23:../common/cmsis/core/cmsis_gcc.h ****    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  24:../common/cmsis/core/cmsis_gcc.h ****    ARE DISCLAIMED. IN NO EVENT SHALL COPYRIGHT HOLDERS AND CONTRIBUTORS BE
+  25:../common/cmsis/core/cmsis_gcc.h ****    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  26:../common/cmsis/core/cmsis_gcc.h ****    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  27:../common/cmsis/core/cmsis_gcc.h ****    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  28:../common/cmsis/core/cmsis_gcc.h ****    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  29:../common/cmsis/core/cmsis_gcc.h ****    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  30:../common/cmsis/core/cmsis_gcc.h ****    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  31:../common/cmsis/core/cmsis_gcc.h ****    POSSIBILITY OF SUCH DAMAGE.
+  32:../common/cmsis/core/cmsis_gcc.h ****    ---------------------------------------------------------------------------*/
+  33:../common/cmsis/core/cmsis_gcc.h **** 
+  34:../common/cmsis/core/cmsis_gcc.h **** 
+  35:../common/cmsis/core/cmsis_gcc.h **** #ifndef __CMSIS_GCC_H
+  36:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_H
+  37:../common/cmsis/core/cmsis_gcc.h **** 
+  38:../common/cmsis/core/cmsis_gcc.h **** /* ignore some GCC warnings */
+  39:../common/cmsis/core/cmsis_gcc.h **** #if defined ( __GNUC__ )
+  40:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic push
+  41:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic ignored "-Wsign-conversion"
+  42:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic ignored "-Wconversion"
+  43:../common/cmsis/core/cmsis_gcc.h **** #pragma GCC diagnostic ignored "-Wunused-parameter"
+  44:../common/cmsis/core/cmsis_gcc.h **** #endif
+  45:../common/cmsis/core/cmsis_gcc.h **** 
+  46:../common/cmsis/core/cmsis_gcc.h **** 
+  47:../common/cmsis/core/cmsis_gcc.h **** /* ###########################  Core Function Access  ########################### */
+  48:../common/cmsis/core/cmsis_gcc.h **** /** \ingroup  CMSIS_Core_FunctionInterface
+  49:../common/cmsis/core/cmsis_gcc.h ****     \defgroup CMSIS_Core_RegAccFunctions CMSIS Core Register Access Functions
+  50:../common/cmsis/core/cmsis_gcc.h ****   @{
+  51:../common/cmsis/core/cmsis_gcc.h ****  */
+  52:../common/cmsis/core/cmsis_gcc.h **** 
+  53:../common/cmsis/core/cmsis_gcc.h **** /**
+  54:../common/cmsis/core/cmsis_gcc.h ****   \brief   Enable IRQ Interrupts
+  55:../common/cmsis/core/cmsis_gcc.h ****   \details Enables IRQ interrupts by clearing the I-bit in the CPSR.
+  56:../common/cmsis/core/cmsis_gcc.h ****            Can only be executed in Privileged modes.
+  57:../common/cmsis/core/cmsis_gcc.h ****  */
+  58:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __enable_irq(void)
+  59:../common/cmsis/core/cmsis_gcc.h **** {
+  60:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsie i" : : : "memory");
+  61:../common/cmsis/core/cmsis_gcc.h **** }
+ARM GAS  /tmp/ccsvJr7z.s 			page 6
+
+
+  62:../common/cmsis/core/cmsis_gcc.h **** 
+  63:../common/cmsis/core/cmsis_gcc.h **** 
+  64:../common/cmsis/core/cmsis_gcc.h **** /**
+  65:../common/cmsis/core/cmsis_gcc.h ****   \brief   Disable IRQ Interrupts
+  66:../common/cmsis/core/cmsis_gcc.h ****   \details Disables IRQ interrupts by setting the I-bit in the CPSR.
+  67:../common/cmsis/core/cmsis_gcc.h ****   Can only be executed in Privileged modes.
+  68:../common/cmsis/core/cmsis_gcc.h ****  */
+  69:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __disable_irq(void)
+ 118              		.loc 2 69 57 view .LVU28
+ 119              	.LBB11:
+  70:../common/cmsis/core/cmsis_gcc.h **** {
+  71:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsid i" : : : "memory");
+ 120              		.loc 2 71 3 view .LVU29
+ 121              		.syntax unified
+ 122              	@ 71 "../common/cmsis/core/cmsis_gcc.h" 1
+ 123 0002 72B6     		cpsid i
+ 124              	@ 0 "" 2
+ 125              		.thumb
+ 126              		.syntax unified
+ 127              	.LBE11:
+ 128              	.LBE10:
+ 108:../bootloader/src/main.c ****   
+ 109:../bootloader/src/main.c ****   /* 获取应用程序栈指针和复位处理程序 */
+ 110:../bootloader/src/main.c ****   app_stack_ptr = *(volatile uint32_t *)(APP_START_ADDR);
+ 129              		.loc 1 110 3 view .LVU30
+ 130              		.loc 1 110 17 is_stmt 0 view .LVU31
+ 131 0004 044B     		ldr	r3, .L11
+ 132 0006 1968     		ldr	r1, [r3]
+ 133              	.LVL8:
+ 111:../bootloader/src/main.c ****   app_reset_handler = *(volatile uint32_t *)(APP_START_ADDR + 4);
+ 134              		.loc 1 111 3 is_stmt 1 view .LVU32
+ 135              		.loc 1 111 21 is_stmt 0 view .LVU33
+ 136 0008 5A68     		ldr	r2, [r3, #4]
+ 137              	.LVL9:
+ 112:../bootloader/src/main.c ****   
+ 113:../bootloader/src/main.c ****   /* 将主栈指针设置为应用程序的栈 */
+ 114:../bootloader/src/main.c ****   __set_MSP(app_stack_ptr);
+ 138              		.loc 1 114 3 is_stmt 1 view .LVU34
+ 139              	.LBB12:
+ 140              	.LBI12:
+  72:../common/cmsis/core/cmsis_gcc.h **** }
+  73:../common/cmsis/core/cmsis_gcc.h **** 
+  74:../common/cmsis/core/cmsis_gcc.h **** 
+  75:../common/cmsis/core/cmsis_gcc.h **** /**
+  76:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Control Register
+  77:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the Control Register.
+  78:../common/cmsis/core/cmsis_gcc.h ****   \return               Control Register value
+  79:../common/cmsis/core/cmsis_gcc.h ****  */
+  80:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_CONTROL(void)
+  81:../common/cmsis/core/cmsis_gcc.h **** {
+  82:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+  83:../common/cmsis/core/cmsis_gcc.h **** 
+  84:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, control" : "=r" (result) );
+  85:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+  86:../common/cmsis/core/cmsis_gcc.h **** }
+  87:../common/cmsis/core/cmsis_gcc.h **** 
+  88:../common/cmsis/core/cmsis_gcc.h **** 
+ARM GAS  /tmp/ccsvJr7z.s 			page 7
+
+
+  89:../common/cmsis/core/cmsis_gcc.h **** /**
+  90:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Control Register
+  91:../common/cmsis/core/cmsis_gcc.h ****   \details Writes the given value to the Control Register.
+  92:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    control  Control Register value to set
+  93:../common/cmsis/core/cmsis_gcc.h ****  */
+  94:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_CONTROL(uint32_t control)
+  95:../common/cmsis/core/cmsis_gcc.h **** {
+  96:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR control, %0" : : "r" (control) : "memory");
+  97:../common/cmsis/core/cmsis_gcc.h **** }
+  98:../common/cmsis/core/cmsis_gcc.h **** 
+  99:../common/cmsis/core/cmsis_gcc.h **** 
+ 100:../common/cmsis/core/cmsis_gcc.h **** /**
+ 101:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get IPSR Register
+ 102:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the IPSR Register.
+ 103:../common/cmsis/core/cmsis_gcc.h ****   \return               IPSR Register value
+ 104:../common/cmsis/core/cmsis_gcc.h ****  */
+ 105:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_IPSR(void)
+ 106:../common/cmsis/core/cmsis_gcc.h **** {
+ 107:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 108:../common/cmsis/core/cmsis_gcc.h **** 
+ 109:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, ipsr" : "=r" (result) );
+ 110:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 111:../common/cmsis/core/cmsis_gcc.h **** }
+ 112:../common/cmsis/core/cmsis_gcc.h **** 
+ 113:../common/cmsis/core/cmsis_gcc.h **** 
+ 114:../common/cmsis/core/cmsis_gcc.h **** /**
+ 115:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get APSR Register
+ 116:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the APSR Register.
+ 117:../common/cmsis/core/cmsis_gcc.h ****   \return               APSR Register value
+ 118:../common/cmsis/core/cmsis_gcc.h ****  */
+ 119:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_APSR(void)
+ 120:../common/cmsis/core/cmsis_gcc.h **** {
+ 121:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 122:../common/cmsis/core/cmsis_gcc.h **** 
+ 123:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, apsr" : "=r" (result) );
+ 124:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 125:../common/cmsis/core/cmsis_gcc.h **** }
+ 126:../common/cmsis/core/cmsis_gcc.h **** 
+ 127:../common/cmsis/core/cmsis_gcc.h **** 
+ 128:../common/cmsis/core/cmsis_gcc.h **** /**
+ 129:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get xPSR Register
+ 130:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the content of the xPSR Register.
+ 131:../common/cmsis/core/cmsis_gcc.h **** 
+ 132:../common/cmsis/core/cmsis_gcc.h ****     \return               xPSR Register value
+ 133:../common/cmsis/core/cmsis_gcc.h ****  */
+ 134:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_xPSR(void)
+ 135:../common/cmsis/core/cmsis_gcc.h **** {
+ 136:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 137:../common/cmsis/core/cmsis_gcc.h **** 
+ 138:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, xpsr" : "=r" (result) );
+ 139:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 140:../common/cmsis/core/cmsis_gcc.h **** }
+ 141:../common/cmsis/core/cmsis_gcc.h **** 
+ 142:../common/cmsis/core/cmsis_gcc.h **** 
+ 143:../common/cmsis/core/cmsis_gcc.h **** /**
+ 144:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Process Stack Pointer
+ 145:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Process Stack Pointer (PSP).
+ARM GAS  /tmp/ccsvJr7z.s 			page 8
+
+
+ 146:../common/cmsis/core/cmsis_gcc.h ****   \return               PSP Register value
+ 147:../common/cmsis/core/cmsis_gcc.h ****  */
+ 148:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_PSP(void)
+ 149:../common/cmsis/core/cmsis_gcc.h **** {
+ 150:../common/cmsis/core/cmsis_gcc.h ****   register uint32_t result;
+ 151:../common/cmsis/core/cmsis_gcc.h **** 
+ 152:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, psp\n"  : "=r" (result) );
+ 153:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 154:../common/cmsis/core/cmsis_gcc.h **** }
+ 155:../common/cmsis/core/cmsis_gcc.h **** 
+ 156:../common/cmsis/core/cmsis_gcc.h **** 
+ 157:../common/cmsis/core/cmsis_gcc.h **** /**
+ 158:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Process Stack Pointer
+ 159:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Process Stack Pointer (PSP).
+ 160:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    topOfProcStack  Process Stack Pointer value to set
+ 161:../common/cmsis/core/cmsis_gcc.h ****  */
+ 162:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_PSP(uint32_t topOfProcStack)
+ 163:../common/cmsis/core/cmsis_gcc.h **** {
+ 164:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR psp, %0\n" : : "r" (topOfProcStack) );
+ 165:../common/cmsis/core/cmsis_gcc.h **** }
+ 166:../common/cmsis/core/cmsis_gcc.h **** 
+ 167:../common/cmsis/core/cmsis_gcc.h **** 
+ 168:../common/cmsis/core/cmsis_gcc.h **** /**
+ 169:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Main Stack Pointer
+ 170:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Main Stack Pointer (MSP).
+ 171:../common/cmsis/core/cmsis_gcc.h ****   \return               MSP Register value
+ 172:../common/cmsis/core/cmsis_gcc.h ****  */
+ 173:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_MSP(void)
+ 174:../common/cmsis/core/cmsis_gcc.h **** {
+ 175:../common/cmsis/core/cmsis_gcc.h ****   register uint32_t result;
+ 176:../common/cmsis/core/cmsis_gcc.h **** 
+ 177:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, msp\n" : "=r" (result) );
+ 178:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 179:../common/cmsis/core/cmsis_gcc.h **** }
+ 180:../common/cmsis/core/cmsis_gcc.h **** 
+ 181:../common/cmsis/core/cmsis_gcc.h **** 
+ 182:../common/cmsis/core/cmsis_gcc.h **** /**
+ 183:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Main Stack Pointer
+ 184:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Main Stack Pointer (MSP).
+ 185:../common/cmsis/core/cmsis_gcc.h **** 
+ 186:../common/cmsis/core/cmsis_gcc.h ****     \param [in]    topOfMainStack  Main Stack Pointer value to set
+ 187:../common/cmsis/core/cmsis_gcc.h ****  */
+ 188:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_MSP(uint32_t topOfMainStack)
+ 141              		.loc 2 188 57 view .LVU35
+ 142              	.LBB13:
+ 189:../common/cmsis/core/cmsis_gcc.h **** {
+ 190:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR msp, %0\n" : : "r" (topOfMainStack) );
+ 143              		.loc 2 190 3 view .LVU36
+ 144              		.syntax unified
+ 145              	@ 190 "../common/cmsis/core/cmsis_gcc.h" 1
+ 146 000a 81F30888 		MSR msp, r1
+ 147              	
+ 148              	@ 0 "" 2
+ 149              	.LVL10:
+ 150              		.loc 2 190 3 is_stmt 0 view .LVU37
+ 151              		.thumb
+ 152              		.syntax unified
+ARM GAS  /tmp/ccsvJr7z.s 			page 9
+
+
+ 153              	.LBE13:
+ 154              	.LBE12:
+ 115:../bootloader/src/main.c ****   
+ 116:../bootloader/src/main.c ****   /* 将向量表重定位到应用程序区域 */
+ 117:../bootloader/src/main.c ****   SCB->VTOR = APP_START_ADDR;
+ 155              		.loc 1 117 3 is_stmt 1 view .LVU38
+ 156              		.loc 1 117 13 is_stmt 0 view .LVU39
+ 157 000e 0349     		ldr	r1, .L11+4
+ 158              	.LVL11:
+ 159              		.loc 1 117 13 view .LVU40
+ 160 0010 8B60     		str	r3, [r1, #8]
+ 118:../bootloader/src/main.c ****   
+ 119:../bootloader/src/main.c ****   /* 为应用程序启用中断 */
+ 120:../bootloader/src/main.c ****   __enable_irq();
+ 161              		.loc 1 120 3 is_stmt 1 view .LVU41
+ 162              	.LBB14:
+ 163              	.LBI14:
+  58:../common/cmsis/core/cmsis_gcc.h **** {
+ 164              		.loc 2 58 57 view .LVU42
+ 165              	.LBB15:
+  60:../common/cmsis/core/cmsis_gcc.h **** }
+ 166              		.loc 2 60 3 view .LVU43
+ 167              		.syntax unified
+ 168              	@ 60 "../common/cmsis/core/cmsis_gcc.h" 1
+ 169 0012 62B6     		cpsie i
+ 170              	@ 0 "" 2
+ 171              		.thumb
+ 172              		.syntax unified
+ 173              	.LBE15:
+ 174              	.LBE14:
+ 121:../bootloader/src/main.c ****   
+ 122:../bootloader/src/main.c ****   /* 跳转到应用程序 */
+ 123:../bootloader/src/main.c ****   app_entry = (pFunction)(app_reset_handler);
+ 175              		.loc 1 123 3 view .LVU44
+ 176              	.LVL12:
+ 124:../bootloader/src/main.c ****   app_entry();
+ 177              		.loc 1 124 3 view .LVU45
+ 178 0014 9047     		blx	r2
+ 179              	.LVL13:
+ 180              	.L9:
+ 125:../bootloader/src/main.c ****   
+ 126:../bootloader/src/main.c ****   /* 不应返回 */
+ 127:../bootloader/src/main.c ****   while (1) {
+ 181              		.loc 1 127 3 view .LVU46
+ 128:../bootloader/src/main.c ****     /* 如果到达此处则出错 */
+ 129:../bootloader/src/main.c ****   }
+ 182              		.loc 1 129 3 view .LVU47
+ 127:../bootloader/src/main.c ****     /* 如果到达此处则出错 */
+ 183              		.loc 1 127 9 view .LVU48
+ 184 0016 FEE7     		b	.L9
+ 185              	.L12:
+ 186              		.align	2
+ 187              	.L11:
+ 188 0018 00000108 		.word	134283264
+ 189 001c 00ED00E0 		.word	-536810240
+ 190              		.cfi_endproc
+ 191              	.LFE125:
+ARM GAS  /tmp/ccsvJr7z.s 			page 10
+
+
+ 193              		.section	.text.bootloader_error_loop,"ax",%progbits
+ 194              		.align	1
+ 195              		.syntax unified
+ 196              		.thumb
+ 197              		.thumb_func
+ 199              	bootloader_error_loop:
+ 200              	.LFB126:
+ 130:../bootloader/src/main.c **** }
+ 131:../bootloader/src/main.c **** 
+ 132:../bootloader/src/main.c **** /**
+ 133:../bootloader/src/main.c ****   * @brief  错误循环 - 停留在 Bootloader 模式
+ 134:../bootloader/src/main.c ****   * @retval 无
+ 135:../bootloader/src/main.c ****   */
+ 136:../bootloader/src/main.c **** static void bootloader_error_loop(void)
+ 137:../bootloader/src/main.c **** {
+ 201              		.loc 1 137 1 view -0
+ 202              		.cfi_startproc
+ 203              		@ Volatile: function does not return.
+ 204              		@ args = 0, pretend = 0, frame = 0
+ 205              		@ frame_needed = 0, uses_anonymous_args = 0
+ 206              		@ link register save eliminated.
+ 138:../bootloader/src/main.c ****   /* LED 常亮以指示错误 */
+ 139:../bootloader/src/main.c ****   GPIOA->BSRR = (1 << 5);  /* 置位 PA5 (LED 点亮) */
+ 207              		.loc 1 139 3 view .LVU50
+ 208              		.loc 1 139 15 is_stmt 0 view .LVU51
+ 209 0000 014B     		ldr	r3, .L15
+ 210 0002 2022     		movs	r2, #32
+ 211 0004 9A61     		str	r2, [r3, #24]
+ 212              	.L14:
+ 140:../bootloader/src/main.c ****   
+ 141:../bootloader/src/main.c ****   while (1) {
+ 213              		.loc 1 141 3 is_stmt 1 view .LVU52
+ 142:../bootloader/src/main.c ****     /* 停留在此处 - 没有有效的应用程序 */
+ 143:../bootloader/src/main.c ****   }
+ 214              		.loc 1 143 3 view .LVU53
+ 141:../bootloader/src/main.c ****     /* 停留在此处 - 没有有效的应用程序 */
+ 215              		.loc 1 141 9 view .LVU54
+ 216 0006 FEE7     		b	.L14
+ 217              	.L16:
+ 218              		.align	2
+ 219              	.L15:
+ 220 0008 00000240 		.word	1073872896
+ 221              		.cfi_endproc
+ 222              	.LFE126:
+ 224              		.section	.text.system_init,"ax",%progbits
+ 225              		.align	1
+ 226              		.global	system_init
+ 227              		.syntax unified
+ 228              		.thumb
+ 229              		.thumb_func
+ 231              	system_init:
+ 232              	.LFB127:
+ 144:../bootloader/src/main.c **** }
+ 145:../bootloader/src/main.c **** 
+ 146:../bootloader/src/main.c **** /**
+ 147:../bootloader/src/main.c ****   * @brief  初始化系统时钟
+ 148:../bootloader/src/main.c ****   * @retval 无
+ARM GAS  /tmp/ccsvJr7z.s 			page 11
+
+
+ 149:../bootloader/src/main.c ****   */
+ 150:../bootloader/src/main.c **** void system_init(void)
+ 151:../bootloader/src/main.c **** {
+ 233              		.loc 1 151 1 view -0
+ 234              		.cfi_startproc
+ 235              		@ args = 0, pretend = 0, frame = 0
+ 236              		@ frame_needed = 0, uses_anonymous_args = 0
+ 237 0000 08B5     		push	{r3, lr}
+ 238              	.LCFI1:
+ 239              		.cfi_def_cfa_offset 8
+ 240              		.cfi_offset 3, -8
+ 241              		.cfi_offset 14, -4
+ 152:../bootloader/src/main.c ****   /* 将 RCC 时钟配置重置为默认复位状态 */
+ 153:../bootloader/src/main.c ****   RCC->CR |= RCC_CR_HSION;                /* 启用 HSI */
+ 242              		.loc 1 153 3 view .LVU56
+ 243              		.loc 1 153 6 is_stmt 0 view .LVU57
+ 244 0002 134A     		ldr	r2, .L20
+ 245 0004 1368     		ldr	r3, [r2]
+ 246              		.loc 1 153 11 view .LVU58
+ 247 0006 43F00103 		orr	r3, r3, #1
+ 248 000a 1360     		str	r3, [r2]
+ 154:../bootloader/src/main.c ****   while (!(RCC->CR & RCC_CR_HSIRDY));     /* 等待 HSI 就绪 */
+ 249              		.loc 1 154 3 is_stmt 1 view .LVU59
+ 250              	.L18:
+ 251              		.loc 1 154 10 discriminator 1 view .LVU60
+ 252              		.loc 1 154 15 is_stmt 0 discriminator 1 view .LVU61
+ 253 000c 104B     		ldr	r3, .L20
+ 254 000e 1B68     		ldr	r3, [r3]
+ 255              		.loc 1 154 10 discriminator 1 view .LVU62
+ 256 0010 13F0020F 		tst	r3, #2
+ 257 0014 FAD0     		beq	.L18
+ 155:../bootloader/src/main.c ****   
+ 156:../bootloader/src/main.c ****   RCC->CFGR = 0x00000000;                 /* 重置 CFGR 寄存器 */
+ 258              		.loc 1 156 3 is_stmt 1 view .LVU63
+ 259              		.loc 1 156 13 is_stmt 0 view .LVU64
+ 260 0016 0E4B     		ldr	r3, .L20
+ 261 0018 0021     		movs	r1, #0
+ 262 001a 9960     		str	r1, [r3, #8]
+ 157:../bootloader/src/main.c ****   RCC->CR &= ~(RCC_CR_HSEON | RCC_CR_CSSON | RCC_CR_PLLON);  /* 禁用 HSE, CSS, PLL */
+ 263              		.loc 1 157 3 is_stmt 1 view .LVU65
+ 264              		.loc 1 157 6 is_stmt 0 view .LVU66
+ 265 001c 1A68     		ldr	r2, [r3]
+ 266              		.loc 1 157 11 view .LVU67
+ 267 001e 22F08472 		bic	r2, r2, #17301504
+ 268 0022 22F48032 		bic	r2, r2, #65536
+ 269 0026 1A60     		str	r2, [r3]
+ 158:../bootloader/src/main.c ****   RCC->CR &= ~RCC_CR_HSEBYP;              /* 禁用 HSE 旁路 */
+ 270              		.loc 1 158 3 is_stmt 1 view .LVU68
+ 271              		.loc 1 158 6 is_stmt 0 view .LVU69
+ 272 0028 1A68     		ldr	r2, [r3]
+ 273              		.loc 1 158 11 view .LVU70
+ 274 002a 22F48022 		bic	r2, r2, #262144
+ 275 002e 1A60     		str	r2, [r3]
+ 159:../bootloader/src/main.c ****   RCC->CFGR &= ~RCC_CFGR_HPRE;            /* 重置 HPRE */
+ 276              		.loc 1 159 3 is_stmt 1 view .LVU71
+ 277              		.loc 1 159 6 is_stmt 0 view .LVU72
+ 278 0030 9A68     		ldr	r2, [r3, #8]
+ARM GAS  /tmp/ccsvJr7z.s 			page 12
+
+
+ 279              		.loc 1 159 13 view .LVU73
+ 280 0032 22F0F002 		bic	r2, r2, #240
+ 281 0036 9A60     		str	r2, [r3, #8]
+ 160:../bootloader/src/main.c ****   RCC->CFGR &= ~RCC_CFGR_PPRE1;           /* 重置 PPRE1 */
+ 282              		.loc 1 160 3 is_stmt 1 view .LVU74
+ 283              		.loc 1 160 6 is_stmt 0 view .LVU75
+ 284 0038 9A68     		ldr	r2, [r3, #8]
+ 285              		.loc 1 160 13 view .LVU76
+ 286 003a 22F4E052 		bic	r2, r2, #7168
+ 287 003e 9A60     		str	r2, [r3, #8]
+ 161:../bootloader/src/main.c ****   RCC->CFGR &= ~RCC_CFGR_PPRE2;           /* 重置 PPRE2 */
+ 288              		.loc 1 161 3 is_stmt 1 view .LVU77
+ 289              		.loc 1 161 6 is_stmt 0 view .LVU78
+ 290 0040 9A68     		ldr	r2, [r3, #8]
+ 291              		.loc 1 161 13 view .LVU79
+ 292 0042 22F46042 		bic	r2, r2, #57344
+ 293 0046 9A60     		str	r2, [r3, #8]
+ 162:../bootloader/src/main.c ****   
+ 163:../bootloader/src/main.c ****   /* 禁用所有中断 */
+ 164:../bootloader/src/main.c ****   RCC->CIR = 0x00000000;
+ 294              		.loc 1 164 3 is_stmt 1 view .LVU80
+ 295              		.loc 1 164 12 is_stmt 0 view .LVU81
+ 296 0048 D960     		str	r1, [r3, #12]
+ 165:../bootloader/src/main.c ****   
+ 166:../bootloader/src/main.c ****   /* SystemInit() 由启动代码调用 */
+ 167:../bootloader/src/main.c ****   /* 向量表已设置为 FLASH_BASE */
+ 168:../bootloader/src/main.c ****   
+ 169:../bootloader/src/main.c ****   /* 更新 SystemCoreClock 变量 */
+ 170:../bootloader/src/main.c ****   SystemCoreClockUpdate();
+ 297              		.loc 1 170 3 is_stmt 1 view .LVU82
+ 298 004a FFF7FEFF 		bl	SystemCoreClockUpdate
+ 299              	.LVL14:
+ 171:../bootloader/src/main.c **** }
+ 300              		.loc 1 171 1 is_stmt 0 view .LVU83
+ 301 004e 08BD     		pop	{r3, pc}
+ 302              	.L21:
+ 303              		.align	2
+ 304              	.L20:
+ 305 0050 00380240 		.word	1073887232
+ 306              		.cfi_endproc
+ 307              	.LFE127:
+ 309              		.section	.text.gpio_init,"ax",%progbits
+ 310              		.align	1
+ 311              		.global	gpio_init
+ 312              		.syntax unified
+ 313              		.thumb
+ 314              		.thumb_func
+ 316              	gpio_init:
+ 317              	.LFB128:
+ 172:../bootloader/src/main.c **** 
+ 173:../bootloader/src/main.c **** /**
+ 174:../bootloader/src/main.c ****   * @brief  初始化用于 LED 的 GPIO (PA5 - 许多 STM32 开发板上的内置 LED)
+ 175:../bootloader/src/main.c ****   * @retval 无
+ 176:../bootloader/src/main.c ****   */
+ 177:../bootloader/src/main.c **** void gpio_init(void)
+ 178:../bootloader/src/main.c **** {
+ 318              		.loc 1 178 1 is_stmt 1 view -0
+ARM GAS  /tmp/ccsvJr7z.s 			page 13
+
+
+ 319              		.cfi_startproc
+ 320              		@ args = 0, pretend = 0, frame = 0
+ 321              		@ frame_needed = 0, uses_anonymous_args = 0
+ 322              		@ link register save eliminated.
+ 179:../bootloader/src/main.c ****   /* 启用 GPIOA 时钟 */
+ 180:../bootloader/src/main.c ****   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+ 323              		.loc 1 180 3 view .LVU85
+ 324              		.loc 1 180 6 is_stmt 0 view .LVU86
+ 325 0000 104A     		ldr	r2, .L23
+ 326 0002 136B     		ldr	r3, [r2, #48]
+ 327              		.loc 1 180 16 view .LVU87
+ 328 0004 43F00103 		orr	r3, r3, #1
+ 329 0008 1363     		str	r3, [r2, #48]
+ 181:../bootloader/src/main.c ****   
+ 182:../bootloader/src/main.c ****   /* 配置 PA5 为输出 */
+ 183:../bootloader/src/main.c ****   GPIOA->MODER &= ~(3 << (5 * 2));        /* 清除 PA5 的模式位 */
+ 330              		.loc 1 183 3 is_stmt 1 view .LVU88
+ 331              		.loc 1 183 8 is_stmt 0 view .LVU89
+ 332 000a 0F4B     		ldr	r3, .L23+4
+ 333 000c 1A68     		ldr	r2, [r3]
+ 334              		.loc 1 183 16 view .LVU90
+ 335 000e 22F44062 		bic	r2, r2, #3072
+ 336 0012 1A60     		str	r2, [r3]
+ 184:../bootloader/src/main.c ****   GPIOA->MODER |= (1 << (5 * 2));         /* 设置 PA5 为输出模式 */
+ 337              		.loc 1 184 3 is_stmt 1 view .LVU91
+ 338              		.loc 1 184 8 is_stmt 0 view .LVU92
+ 339 0014 1A68     		ldr	r2, [r3]
+ 340              		.loc 1 184 16 view .LVU93
+ 341 0016 42F48062 		orr	r2, r2, #1024
+ 342 001a 1A60     		str	r2, [r3]
+ 185:../bootloader/src/main.c ****   
+ 186:../bootloader/src/main.c ****   /* 配置 PA5 输出类型（推挽） */
+ 187:../bootloader/src/main.c ****   GPIOA->OTYPER &= ~(1 << 5);             /* 输出推挽 */
+ 343              		.loc 1 187 3 is_stmt 1 view .LVU94
+ 344              		.loc 1 187 8 is_stmt 0 view .LVU95
+ 345 001c 5A68     		ldr	r2, [r3, #4]
+ 346              		.loc 1 187 17 view .LVU96
+ 347 001e 22F02002 		bic	r2, r2, #32
+ 348 0022 5A60     		str	r2, [r3, #4]
+ 188:../bootloader/src/main.c ****   
+ 189:../bootloader/src/main.c ****   /* 配置 PA5 速度（高速） */
+ 190:../bootloader/src/main.c ****   GPIOA->OSPEEDR &= ~(3 << (5 * 2));      /* 清除速度位 */
+ 349              		.loc 1 190 3 is_stmt 1 view .LVU97
+ 350              		.loc 1 190 8 is_stmt 0 view .LVU98
+ 351 0024 9A68     		ldr	r2, [r3, #8]
+ 352              		.loc 1 190 18 view .LVU99
+ 353 0026 22F44062 		bic	r2, r2, #3072
+ 354 002a 9A60     		str	r2, [r3, #8]
+ 191:../bootloader/src/main.c ****   GPIOA->OSPEEDR |= (2 << (5 * 2));       /* 高速 */
+ 355              		.loc 1 191 3 is_stmt 1 view .LVU100
+ 356              		.loc 1 191 8 is_stmt 0 view .LVU101
+ 357 002c 9A68     		ldr	r2, [r3, #8]
+ 358              		.loc 1 191 18 view .LVU102
+ 359 002e 42F40062 		orr	r2, r2, #2048
+ 360 0032 9A60     		str	r2, [r3, #8]
+ 192:../bootloader/src/main.c ****   
+ 193:../bootloader/src/main.c ****   /* 配置 PA5 无上拉/下拉 */
+ARM GAS  /tmp/ccsvJr7z.s 			page 14
+
+
+ 194:../bootloader/src/main.c ****   GPIOA->PUPDR &= ~(3 << (5 * 2));        /* 无上拉/下拉 */
+ 361              		.loc 1 194 3 is_stmt 1 view .LVU103
+ 362              		.loc 1 194 8 is_stmt 0 view .LVU104
+ 363 0034 DA68     		ldr	r2, [r3, #12]
+ 364              		.loc 1 194 16 view .LVU105
+ 365 0036 22F44062 		bic	r2, r2, #3072
+ 366 003a DA60     		str	r2, [r3, #12]
+ 195:../bootloader/src/main.c ****   
+ 196:../bootloader/src/main.c ****   /* 初始关闭 LED */
+ 197:../bootloader/src/main.c ****   GPIOA->BSRR = (1 << (5 + 16));          /* 复位 PA5 */
+ 367              		.loc 1 197 3 is_stmt 1 view .LVU106
+ 368              		.loc 1 197 15 is_stmt 0 view .LVU107
+ 369 003c 4FF40012 		mov	r2, #2097152
+ 370 0040 9A61     		str	r2, [r3, #24]
+ 198:../bootloader/src/main.c **** }
+ 371              		.loc 1 198 1 view .LVU108
+ 372 0042 7047     		bx	lr
+ 373              	.L24:
+ 374              		.align	2
+ 375              	.L23:
+ 376 0044 00380240 		.word	1073887232
+ 377 0048 00000240 		.word	1073872896
+ 378              		.cfi_endproc
+ 379              	.LFE128:
+ 381              		.section	.text.led_toggle,"ax",%progbits
+ 382              		.align	1
+ 383              		.global	led_toggle
+ 384              		.syntax unified
+ 385              		.thumb
+ 386              		.thumb_func
+ 388              	led_toggle:
+ 389              	.LFB129:
+ 199:../bootloader/src/main.c **** 
+ 200:../bootloader/src/main.c **** /**
+ 201:../bootloader/src/main.c ****   * @brief  翻转 LED 状态
+ 202:../bootloader/src/main.c ****   * @retval 无
+ 203:../bootloader/src/main.c ****   */
+ 204:../bootloader/src/main.c **** void led_toggle(void)
+ 205:../bootloader/src/main.c **** {
+ 390              		.loc 1 205 1 is_stmt 1 view -0
+ 391              		.cfi_startproc
+ 392              		@ args = 0, pretend = 0, frame = 0
+ 393              		@ frame_needed = 0, uses_anonymous_args = 0
+ 394              		@ link register save eliminated.
+ 206:../bootloader/src/main.c ****   /* 翻转 PA5 */
+ 207:../bootloader/src/main.c ****   if (GPIOA->ODR & (1 << 5)) {
+ 395              		.loc 1 207 3 view .LVU110
+ 396              		.loc 1 207 12 is_stmt 0 view .LVU111
+ 397 0000 064B     		ldr	r3, .L28
+ 398 0002 5B69     		ldr	r3, [r3, #20]
+ 399              		.loc 1 207 6 view .LVU112
+ 400 0004 13F0200F 		tst	r3, #32
+ 401 0008 04D0     		beq	.L26
+ 208:../bootloader/src/main.c ****     GPIOA->BSRR = (1 << (5 + 16));        /* 复位 PA5 */
+ 402              		.loc 1 208 5 is_stmt 1 view .LVU113
+ 403              		.loc 1 208 17 is_stmt 0 view .LVU114
+ 404 000a 044B     		ldr	r3, .L28
+ARM GAS  /tmp/ccsvJr7z.s 			page 15
+
+
+ 405 000c 4FF40012 		mov	r2, #2097152
+ 406 0010 9A61     		str	r2, [r3, #24]
+ 407 0012 7047     		bx	lr
+ 408              	.L26:
+ 209:../bootloader/src/main.c ****   } else {
+ 210:../bootloader/src/main.c ****     GPIOA->BSRR = (1 << 5);               /* 置位 PA5 */
+ 409              		.loc 1 210 5 is_stmt 1 view .LVU115
+ 410              		.loc 1 210 17 is_stmt 0 view .LVU116
+ 411 0014 014B     		ldr	r3, .L28
+ 412 0016 2022     		movs	r2, #32
+ 413 0018 9A61     		str	r2, [r3, #24]
+ 211:../bootloader/src/main.c ****   }
+ 212:../bootloader/src/main.c **** }
+ 414              		.loc 1 212 1 view .LVU117
+ 415 001a 7047     		bx	lr
+ 416              	.L29:
+ 417              		.align	2
+ 418              	.L28:
+ 419 001c 00000240 		.word	1073872896
+ 420              		.cfi_endproc
+ 421              	.LFE129:
+ 423              		.section	.text.delay_ms,"ax",%progbits
+ 424              		.align	1
+ 425              		.global	delay_ms
+ 426              		.syntax unified
+ 427              		.thumb
+ 428              		.thumb_func
+ 430              	delay_ms:
+ 431              	.LVL15:
+ 432              	.LFB130:
+ 213:../bootloader/src/main.c **** 
+ 214:../bootloader/src/main.c **** /**
+ 215:../bootloader/src/main.c ****   * @brief  使用 SysTick 的简单延迟函数（未校准，仅为忙等待）
+ 216:../bootloader/src/main.c ****   * @param  ms: 延迟时间（毫秒）
+ 217:../bootloader/src/main.c ****   * @retval 无
+ 218:../bootloader/src/main.c ****   */
+ 219:../bootloader/src/main.c **** void delay_ms(uint32_t ms)
+ 220:../bootloader/src/main.c **** {
+ 433              		.loc 1 220 1 is_stmt 1 view -0
+ 434              		.cfi_startproc
+ 435              		@ args = 0, pretend = 0, frame = 8
+ 436              		@ frame_needed = 0, uses_anonymous_args = 0
+ 437              		@ link register save eliminated.
+ 438              		.loc 1 220 1 is_stmt 0 view .LVU119
+ 439 0000 82B0     		sub	sp, sp, #8
+ 440              	.LCFI2:
+ 441              		.cfi_def_cfa_offset 8
+ 221:../bootloader/src/main.c ****   /* 简单的忙等待延迟 - 不精确但对 Bootloader 足够 */
+ 222:../bootloader/src/main.c ****   /* 假设 16MHz HSI 时钟（复位后默认） */
+ 223:../bootloader/src/main.c ****   volatile uint32_t count;
+ 442              		.loc 1 223 3 is_stmt 1 view .LVU120
+ 224:../bootloader/src/main.c ****   volatile uint32_t i;
+ 443              		.loc 1 224 3 view .LVU121
+ 225:../bootloader/src/main.c ****   
+ 226:../bootloader/src/main.c ****   /* 根据实际时钟频率调整此值 */
+ 227:../bootloader/src/main.c ****   /* 对于 16MHz：每毫秒约 16000 个周期 */
+ 228:../bootloader/src/main.c ****   count = ms * 1600;
+ARM GAS  /tmp/ccsvJr7z.s 			page 16
+
+
+ 444              		.loc 1 228 3 view .LVU122
+ 445              		.loc 1 228 14 is_stmt 0 view .LVU123
+ 446 0002 4FF4C863 		mov	r3, #1600
+ 447 0006 03FB00F0 		mul	r0, r3, r0
+ 448              	.LVL16:
+ 449              		.loc 1 228 9 view .LVU124
+ 450 000a 0190     		str	r0, [sp, #4]
+ 229:../bootloader/src/main.c ****   
+ 230:../bootloader/src/main.c ****   for (i = 0; i < count; i++) {
+ 451              		.loc 1 230 3 is_stmt 1 view .LVU125
+ 452              		.loc 1 230 10 is_stmt 0 view .LVU126
+ 453 000c 0023     		movs	r3, #0
+ 454 000e 0093     		str	r3, [sp]
+ 455              		.loc 1 230 3 view .LVU127
+ 456 0010 03E0     		b	.L31
+ 457              	.L32:
+ 231:../bootloader/src/main.c ****     __NOP();
+ 458              		.loc 1 231 5 is_stmt 1 view .LVU128
+ 459              	.LBB16:
+ 460              	.LBI16:
+ 191:../common/cmsis/core/cmsis_gcc.h **** }
+ 192:../common/cmsis/core/cmsis_gcc.h **** 
+ 193:../common/cmsis/core/cmsis_gcc.h **** 
+ 194:../common/cmsis/core/cmsis_gcc.h **** /**
+ 195:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Priority Mask
+ 196:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current state of the priority mask bit from the Priority Mask Register.
+ 197:../common/cmsis/core/cmsis_gcc.h ****   \return               Priority Mask value
+ 198:../common/cmsis/core/cmsis_gcc.h ****  */
+ 199:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_PRIMASK(void)
+ 200:../common/cmsis/core/cmsis_gcc.h **** {
+ 201:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 202:../common/cmsis/core/cmsis_gcc.h **** 
+ 203:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, primask" : "=r" (result) );
+ 204:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 205:../common/cmsis/core/cmsis_gcc.h **** }
+ 206:../common/cmsis/core/cmsis_gcc.h **** 
+ 207:../common/cmsis/core/cmsis_gcc.h **** 
+ 208:../common/cmsis/core/cmsis_gcc.h **** /**
+ 209:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Priority Mask
+ 210:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Priority Mask Register.
+ 211:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    priMask  Priority Mask
+ 212:../common/cmsis/core/cmsis_gcc.h ****  */
+ 213:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_PRIMASK(uint32_t priMask)
+ 214:../common/cmsis/core/cmsis_gcc.h **** {
+ 215:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR primask, %0" : : "r" (priMask) : "memory");
+ 216:../common/cmsis/core/cmsis_gcc.h **** }
+ 217:../common/cmsis/core/cmsis_gcc.h **** 
+ 218:../common/cmsis/core/cmsis_gcc.h **** 
+ 219:../common/cmsis/core/cmsis_gcc.h **** #if       (__CORTEX_M >= 0x03U)
+ 220:../common/cmsis/core/cmsis_gcc.h **** 
+ 221:../common/cmsis/core/cmsis_gcc.h **** /**
+ 222:../common/cmsis/core/cmsis_gcc.h ****   \brief   Enable FIQ
+ 223:../common/cmsis/core/cmsis_gcc.h ****   \details Enables FIQ interrupts by clearing the F-bit in the CPSR.
+ 224:../common/cmsis/core/cmsis_gcc.h ****            Can only be executed in Privileged modes.
+ 225:../common/cmsis/core/cmsis_gcc.h ****  */
+ 226:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __enable_fault_irq(void)
+ 227:../common/cmsis/core/cmsis_gcc.h **** {
+ARM GAS  /tmp/ccsvJr7z.s 			page 17
+
+
+ 228:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsie f" : : : "memory");
+ 229:../common/cmsis/core/cmsis_gcc.h **** }
+ 230:../common/cmsis/core/cmsis_gcc.h **** 
+ 231:../common/cmsis/core/cmsis_gcc.h **** 
+ 232:../common/cmsis/core/cmsis_gcc.h **** /**
+ 233:../common/cmsis/core/cmsis_gcc.h ****   \brief   Disable FIQ
+ 234:../common/cmsis/core/cmsis_gcc.h ****   \details Disables FIQ interrupts by setting the F-bit in the CPSR.
+ 235:../common/cmsis/core/cmsis_gcc.h ****            Can only be executed in Privileged modes.
+ 236:../common/cmsis/core/cmsis_gcc.h ****  */
+ 237:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __disable_fault_irq(void)
+ 238:../common/cmsis/core/cmsis_gcc.h **** {
+ 239:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("cpsid f" : : : "memory");
+ 240:../common/cmsis/core/cmsis_gcc.h **** }
+ 241:../common/cmsis/core/cmsis_gcc.h **** 
+ 242:../common/cmsis/core/cmsis_gcc.h **** 
+ 243:../common/cmsis/core/cmsis_gcc.h **** /**
+ 244:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Base Priority
+ 245:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Base Priority register.
+ 246:../common/cmsis/core/cmsis_gcc.h ****   \return               Base Priority register value
+ 247:../common/cmsis/core/cmsis_gcc.h ****  */
+ 248:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_BASEPRI(void)
+ 249:../common/cmsis/core/cmsis_gcc.h **** {
+ 250:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 251:../common/cmsis/core/cmsis_gcc.h **** 
+ 252:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, basepri" : "=r" (result) );
+ 253:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 254:../common/cmsis/core/cmsis_gcc.h **** }
+ 255:../common/cmsis/core/cmsis_gcc.h **** 
+ 256:../common/cmsis/core/cmsis_gcc.h **** 
+ 257:../common/cmsis/core/cmsis_gcc.h **** /**
+ 258:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Base Priority
+ 259:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Base Priority register.
+ 260:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    basePri  Base Priority value to set
+ 261:../common/cmsis/core/cmsis_gcc.h ****  */
+ 262:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_BASEPRI(uint32_t value)
+ 263:../common/cmsis/core/cmsis_gcc.h **** {
+ 264:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR basepri, %0" : : "r" (value) : "memory");
+ 265:../common/cmsis/core/cmsis_gcc.h **** }
+ 266:../common/cmsis/core/cmsis_gcc.h **** 
+ 267:../common/cmsis/core/cmsis_gcc.h **** 
+ 268:../common/cmsis/core/cmsis_gcc.h **** /**
+ 269:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Base Priority with condition
+ 270:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Base Priority register only if BASEPRI masking is disable
+ 271:../common/cmsis/core/cmsis_gcc.h ****            or the new value increases the BASEPRI priority level.
+ 272:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    basePri  Base Priority value to set
+ 273:../common/cmsis/core/cmsis_gcc.h ****  */
+ 274:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_BASEPRI_MAX(uint32_t value)
+ 275:../common/cmsis/core/cmsis_gcc.h **** {
+ 276:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR basepri_max, %0" : : "r" (value) : "memory");
+ 277:../common/cmsis/core/cmsis_gcc.h **** }
+ 278:../common/cmsis/core/cmsis_gcc.h **** 
+ 279:../common/cmsis/core/cmsis_gcc.h **** 
+ 280:../common/cmsis/core/cmsis_gcc.h **** /**
+ 281:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get Fault Mask
+ 282:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Fault Mask register.
+ 283:../common/cmsis/core/cmsis_gcc.h ****   \return               Fault Mask register value
+ 284:../common/cmsis/core/cmsis_gcc.h ****  */
+ARM GAS  /tmp/ccsvJr7z.s 			page 18
+
+
+ 285:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_FAULTMASK(void)
+ 286:../common/cmsis/core/cmsis_gcc.h **** {
+ 287:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 288:../common/cmsis/core/cmsis_gcc.h **** 
+ 289:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MRS %0, faultmask" : "=r" (result) );
+ 290:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 291:../common/cmsis/core/cmsis_gcc.h **** }
+ 292:../common/cmsis/core/cmsis_gcc.h **** 
+ 293:../common/cmsis/core/cmsis_gcc.h **** 
+ 294:../common/cmsis/core/cmsis_gcc.h **** /**
+ 295:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set Fault Mask
+ 296:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Fault Mask register.
+ 297:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    faultMask  Fault Mask value to set
+ 298:../common/cmsis/core/cmsis_gcc.h ****  */
+ 299:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_FAULTMASK(uint32_t faultMask)
+ 300:../common/cmsis/core/cmsis_gcc.h **** {
+ 301:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("MSR faultmask, %0" : : "r" (faultMask) : "memory");
+ 302:../common/cmsis/core/cmsis_gcc.h **** }
+ 303:../common/cmsis/core/cmsis_gcc.h **** 
+ 304:../common/cmsis/core/cmsis_gcc.h **** #endif /* (__CORTEX_M >= 0x03U) */
+ 305:../common/cmsis/core/cmsis_gcc.h **** 
+ 306:../common/cmsis/core/cmsis_gcc.h **** 
+ 307:../common/cmsis/core/cmsis_gcc.h **** #if       (__CORTEX_M == 0x04U) || (__CORTEX_M == 0x07U)
+ 308:../common/cmsis/core/cmsis_gcc.h **** 
+ 309:../common/cmsis/core/cmsis_gcc.h **** /**
+ 310:../common/cmsis/core/cmsis_gcc.h ****   \brief   Get FPSCR
+ 311:../common/cmsis/core/cmsis_gcc.h ****   \details Returns the current value of the Floating Point Status/Control register.
+ 312:../common/cmsis/core/cmsis_gcc.h ****   \return               Floating Point Status/Control register value
+ 313:../common/cmsis/core/cmsis_gcc.h ****  */
+ 314:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE uint32_t __get_FPSCR(void)
+ 315:../common/cmsis/core/cmsis_gcc.h **** {
+ 316:../common/cmsis/core/cmsis_gcc.h **** #if (__FPU_PRESENT == 1U) && (__FPU_USED == 1U)
+ 317:../common/cmsis/core/cmsis_gcc.h ****   uint32_t result;
+ 318:../common/cmsis/core/cmsis_gcc.h **** 
+ 319:../common/cmsis/core/cmsis_gcc.h ****   /* Empty asm statement works as a scheduling barrier */
+ 320:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ 321:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("VMRS %0, fpscr" : "=r" (result) );
+ 322:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ 323:../common/cmsis/core/cmsis_gcc.h ****   return(result);
+ 324:../common/cmsis/core/cmsis_gcc.h **** #else
+ 325:../common/cmsis/core/cmsis_gcc.h ****    return(0);
+ 326:../common/cmsis/core/cmsis_gcc.h **** #endif
+ 327:../common/cmsis/core/cmsis_gcc.h **** }
+ 328:../common/cmsis/core/cmsis_gcc.h **** 
+ 329:../common/cmsis/core/cmsis_gcc.h **** 
+ 330:../common/cmsis/core/cmsis_gcc.h **** /**
+ 331:../common/cmsis/core/cmsis_gcc.h ****   \brief   Set FPSCR
+ 332:../common/cmsis/core/cmsis_gcc.h ****   \details Assigns the given value to the Floating Point Status/Control register.
+ 333:../common/cmsis/core/cmsis_gcc.h ****   \param [in]    fpscr  Floating Point Status/Control value to set
+ 334:../common/cmsis/core/cmsis_gcc.h ****  */
+ 335:../common/cmsis/core/cmsis_gcc.h **** __attribute__( ( always_inline ) ) __STATIC_INLINE void __set_FPSCR(uint32_t fpscr)
+ 336:../common/cmsis/core/cmsis_gcc.h **** {
+ 337:../common/cmsis/core/cmsis_gcc.h **** #if (__FPU_PRESENT == 1U) && (__FPU_USED == 1U)
+ 338:../common/cmsis/core/cmsis_gcc.h ****   /* Empty asm statement works as a scheduling barrier */
+ 339:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ 340:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("VMSR fpscr, %0" : : "r" (fpscr) : "vfpcc");
+ 341:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("");
+ARM GAS  /tmp/ccsvJr7z.s 			page 19
+
+
+ 342:../common/cmsis/core/cmsis_gcc.h **** #endif
+ 343:../common/cmsis/core/cmsis_gcc.h **** }
+ 344:../common/cmsis/core/cmsis_gcc.h **** 
+ 345:../common/cmsis/core/cmsis_gcc.h **** #endif /* (__CORTEX_M == 0x04U) || (__CORTEX_M == 0x07U) */
+ 346:../common/cmsis/core/cmsis_gcc.h **** 
+ 347:../common/cmsis/core/cmsis_gcc.h **** 
+ 348:../common/cmsis/core/cmsis_gcc.h **** 
+ 349:../common/cmsis/core/cmsis_gcc.h **** /*@} end of CMSIS_Core_RegAccFunctions */
+ 350:../common/cmsis/core/cmsis_gcc.h **** 
+ 351:../common/cmsis/core/cmsis_gcc.h **** 
+ 352:../common/cmsis/core/cmsis_gcc.h **** /* ##########################  Core Instruction Access  ######################### */
+ 353:../common/cmsis/core/cmsis_gcc.h **** /** \defgroup CMSIS_Core_InstructionInterface CMSIS Core Instruction Interface
+ 354:../common/cmsis/core/cmsis_gcc.h ****   Access to dedicated instructions
+ 355:../common/cmsis/core/cmsis_gcc.h ****   @{
+ 356:../common/cmsis/core/cmsis_gcc.h **** */
+ 357:../common/cmsis/core/cmsis_gcc.h **** 
+ 358:../common/cmsis/core/cmsis_gcc.h **** /* Define macros for porting to both thumb1 and thumb2.
+ 359:../common/cmsis/core/cmsis_gcc.h ****  * For thumb1, use low register (r0-r7), specified by constraint "l"
+ 360:../common/cmsis/core/cmsis_gcc.h ****  * Otherwise, use general registers, specified by constraint "r" */
+ 361:../common/cmsis/core/cmsis_gcc.h **** #if defined (__thumb__) && !defined (__thumb2__)
+ 362:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_OUT_REG(r) "=l" (r)
+ 363:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_USE_REG(r) "l" (r)
+ 364:../common/cmsis/core/cmsis_gcc.h **** #else
+ 365:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_OUT_REG(r) "=r" (r)
+ 366:../common/cmsis/core/cmsis_gcc.h **** #define __CMSIS_GCC_USE_REG(r) "r" (r)
+ 367:../common/cmsis/core/cmsis_gcc.h **** #endif
+ 368:../common/cmsis/core/cmsis_gcc.h **** 
+ 369:../common/cmsis/core/cmsis_gcc.h **** /**
+ 370:../common/cmsis/core/cmsis_gcc.h ****   \brief   No Operation
+ 371:../common/cmsis/core/cmsis_gcc.h ****   \details No Operation does nothing. This instruction can be used for code alignment purposes.
+ 372:../common/cmsis/core/cmsis_gcc.h ****  */
+ 373:../common/cmsis/core/cmsis_gcc.h **** __attribute__((always_inline)) __STATIC_INLINE void __NOP(void)
+ 461              		.loc 2 373 53 view .LVU129
+ 462              	.LBB17:
+ 374:../common/cmsis/core/cmsis_gcc.h **** {
+ 375:../common/cmsis/core/cmsis_gcc.h ****   __ASM volatile ("nop");
+ 463              		.loc 2 375 3 view .LVU130
+ 464              		.syntax unified
+ 465              	@ 375 "../common/cmsis/core/cmsis_gcc.h" 1
+ 466 0012 00BF     		nop
+ 467              	@ 0 "" 2
+ 468              		.thumb
+ 469              		.syntax unified
+ 470              	.LBE17:
+ 471              	.LBE16:
+ 230:../bootloader/src/main.c ****     __NOP();
+ 472              		.loc 1 230 27 discriminator 3 view .LVU131
+ 473 0014 009B     		ldr	r3, [sp]
+ 474 0016 0133     		adds	r3, r3, #1
+ 475 0018 0093     		str	r3, [sp]
+ 476              	.L31:
+ 230:../bootloader/src/main.c ****     __NOP();
+ 477              		.loc 1 230 17 discriminator 1 view .LVU132
+ 478 001a 009A     		ldr	r2, [sp]
+ 479 001c 019B     		ldr	r3, [sp, #4]
+ 480 001e 9A42     		cmp	r2, r3
+ 481 0020 F7D3     		bcc	.L32
+ARM GAS  /tmp/ccsvJr7z.s 			page 20
+
+
+ 232:../bootloader/src/main.c ****   }
+ 233:../bootloader/src/main.c **** }
+ 482              		.loc 1 233 1 is_stmt 0 view .LVU133
+ 483 0022 02B0     		add	sp, sp, #8
+ 484              	.LCFI3:
+ 485              		.cfi_def_cfa_offset 0
+ 486              		@ sp needed
+ 487 0024 7047     		bx	lr
+ 488              		.cfi_endproc
+ 489              	.LFE130:
+ 491              		.section	.text.main,"ax",%progbits
+ 492              		.align	1
+ 493              		.global	main
+ 494              		.syntax unified
+ 495              		.thumb
+ 496              		.thumb_func
+ 498              	main:
+ 499              	.LFB123:
+  26:../bootloader/src/main.c ****   /* 初始化系统时钟和外设 */
+ 500              		.loc 1 26 1 is_stmt 1 view -0
+ 501              		.cfi_startproc
+ 502              		@ Volatile: function does not return.
+ 503              		@ args = 0, pretend = 0, frame = 0
+ 504              		@ frame_needed = 0, uses_anonymous_args = 0
+ 505 0000 08B5     		push	{r3, lr}
+ 506              	.LCFI4:
+ 507              		.cfi_def_cfa_offset 8
+ 508              		.cfi_offset 3, -8
+ 509              		.cfi_offset 14, -4
+  28:../bootloader/src/main.c ****   
+ 510              		.loc 1 28 3 view .LVU135
+ 511 0002 FFF7FEFF 		bl	system_init
+ 512              	.LVL17:
+  31:../bootloader/src/main.c ****   
+ 513              		.loc 1 31 3 view .LVU136
+ 514 0006 FFF7FEFF 		bl	gpio_init
+ 515              	.LVL18:
+  34:../bootloader/src/main.c ****     /* 应用程序有效，短暂延迟后跳转 */
+ 516              		.loc 1 34 3 view .LVU137
+  34:../bootloader/src/main.c ****     /* 应用程序有效，短暂延迟后跳转 */
+ 517              		.loc 1 34 7 is_stmt 0 view .LVU138
+ 518 000a FFF7FEFF 		bl	validate_application
+ 519              	.LVL19:
+  34:../bootloader/src/main.c ****     /* 应用程序有效，短暂延迟后跳转 */
+ 520              		.loc 1 34 6 discriminator 1 view .LVU139
+ 521 000e 98B9     		cbnz	r0, .L35
+  37:../bootloader/src/main.c ****     
+ 522              		.loc 1 37 5 is_stmt 1 view .LVU140
+  37:../bootloader/src/main.c ****     
+ 523              		.loc 1 37 18 is_stmt 0 view .LVU141
+ 524 0010 0A4B     		ldr	r3, .L39
+ 525 0012 4FF47A72 		mov	r2, #1000
+ 526 0016 1A60     		str	r2, [r3]
+  40:../bootloader/src/main.c ****       led_toggle();
+ 527              		.loc 1 40 5 is_stmt 1 view .LVU142
+  40:../bootloader/src/main.c ****       led_toggle();
+ 528              		.loc 1 40 11 is_stmt 0 view .LVU143
+ARM GAS  /tmp/ccsvJr7z.s 			page 21
+
+
+ 529 0018 08E0     		b	.L36
+ 530              	.L37:
+  41:../bootloader/src/main.c ****       delay_ms(100);
+ 531              		.loc 1 41 7 is_stmt 1 view .LVU144
+ 532 001a FFF7FEFF 		bl	led_toggle
+ 533              	.LVL20:
+  42:../bootloader/src/main.c ****       boot_timeout -= 100;
+ 534              		.loc 1 42 7 view .LVU145
+ 535 001e 6420     		movs	r0, #100
+ 536 0020 FFF7FEFF 		bl	delay_ms
+ 537              	.LVL21:
+  43:../bootloader/src/main.c ****     }
+ 538              		.loc 1 43 7 view .LVU146
+  43:../bootloader/src/main.c ****     }
+ 539              		.loc 1 43 20 is_stmt 0 view .LVU147
+ 540 0024 054A     		ldr	r2, .L39
+ 541 0026 1368     		ldr	r3, [r2]
+ 542 0028 643B     		subs	r3, r3, #100
+ 543 002a 1360     		str	r3, [r2]
+ 544              	.L36:
+  40:../bootloader/src/main.c ****       led_toggle();
+ 545              		.loc 1 40 25 is_stmt 1 view .LVU148
+ 546 002c 034B     		ldr	r3, .L39
+ 547 002e 1B68     		ldr	r3, [r3]
+ 548 0030 002B     		cmp	r3, #0
+ 549 0032 F2D1     		bne	.L37
+  47:../bootloader/src/main.c ****   } else {
+ 550              		.loc 1 47 5 view .LVU149
+ 551 0034 FFF7FEFF 		bl	bootloader_jump_to_app
+ 552              	.LVL22:
+ 553              	.L35:
+  51:../bootloader/src/main.c ****   }
+ 554              		.loc 1 51 5 view .LVU150
+ 555 0038 FFF7FEFF 		bl	bootloader_error_loop
+ 556              	.LVL23:
+ 557              	.L40:
+ 558              		.align	2
+ 559              	.L39:
+ 560 003c 00000000 		.word	boot_timeout
+ 561              		.cfi_endproc
+ 562              	.LFE123:
+ 564              		.section	.bss.boot_flag,"aw",%nobits
+ 567              	boot_flag:
+ 568 0000 00       		.space	1
+ 569              		.section	.bss.boot_timeout,"aw",%nobits
+ 570              		.align	2
+ 573              	boot_timeout:
+ 574 0000 00000000 		.space	4
+ 575              		.text
+ 576              	.Letext0:
+ 577              		.file 3 "/usr/lib/gcc/arm-none-eabi/13.2.1/include/stdint.h"
+ 578              		.file 4 "../common/cmsis/core/core_cm4.h"
+ 579              		.file 5 "../common/cmsis/device/stm32f401xe.h"
+ 580              		.file 6 "../bootloader/inc/main.h"
+ 581              		.file 7 "../common/cmsis/device/system_stm32f4xx.h"
+ARM GAS  /tmp/ccsvJr7z.s 			page 22
+
+
+DEFINED SYMBOLS
+                            *ABS*:00000000 main.c
+     /tmp/ccsvJr7z.s:21     .text.validate_application:00000000 $t
+     /tmp/ccsvJr7z.s:26     .text.validate_application:00000000 validate_application
+     /tmp/ccsvJr7z.s:89     .text.validate_application:0000003c $d
+     /tmp/ccsvJr7z.s:94     .text.bootloader_jump_to_app:00000000 $t
+     /tmp/ccsvJr7z.s:99     .text.bootloader_jump_to_app:00000000 bootloader_jump_to_app
+     /tmp/ccsvJr7z.s:188    .text.bootloader_jump_to_app:00000018 $d
+     /tmp/ccsvJr7z.s:194    .text.bootloader_error_loop:00000000 $t
+     /tmp/ccsvJr7z.s:199    .text.bootloader_error_loop:00000000 bootloader_error_loop
+     /tmp/ccsvJr7z.s:220    .text.bootloader_error_loop:00000008 $d
+     /tmp/ccsvJr7z.s:225    .text.system_init:00000000 $t
+     /tmp/ccsvJr7z.s:231    .text.system_init:00000000 system_init
+     /tmp/ccsvJr7z.s:305    .text.system_init:00000050 $d
+     /tmp/ccsvJr7z.s:310    .text.gpio_init:00000000 $t
+     /tmp/ccsvJr7z.s:316    .text.gpio_init:00000000 gpio_init
+     /tmp/ccsvJr7z.s:376    .text.gpio_init:00000044 $d
+     /tmp/ccsvJr7z.s:382    .text.led_toggle:00000000 $t
+     /tmp/ccsvJr7z.s:388    .text.led_toggle:00000000 led_toggle
+     /tmp/ccsvJr7z.s:419    .text.led_toggle:0000001c $d
+     /tmp/ccsvJr7z.s:424    .text.delay_ms:00000000 $t
+     /tmp/ccsvJr7z.s:430    .text.delay_ms:00000000 delay_ms
+     /tmp/ccsvJr7z.s:492    .text.main:00000000 $t
+     /tmp/ccsvJr7z.s:498    .text.main:00000000 main
+     /tmp/ccsvJr7z.s:560    .text.main:0000003c $d
+     /tmp/ccsvJr7z.s:573    .bss.boot_timeout:00000000 boot_timeout
+     /tmp/ccsvJr7z.s:567    .bss.boot_flag:00000000 boot_flag
+     /tmp/ccsvJr7z.s:568    .bss.boot_flag:00000000 $d
+     /tmp/ccsvJr7z.s:570    .bss.boot_timeout:00000000 $d
+
+UNDEFINED SYMBOLS
+SystemCoreClockUpdate
