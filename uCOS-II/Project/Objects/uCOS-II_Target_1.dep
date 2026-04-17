@@ -1,104 +1,0 @@
-Dependencies for Project 'uCOS-II', Target 'Target_1': (DO NOT MODIFY !)
-CompilerVersion: 6240000::V6.24::ARMCLANG
-F (..\Core\os.h)(0x69A6A200)()
-F (..\Core\os_core.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_core.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_dbg_r.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_dbg_r.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_flag.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_flag.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_mbox.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_mbox.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_mem.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_mem.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_mutex.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_mutex.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_q.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_q.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_sem.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_sem.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_task.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_task.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_time.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_time.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_tmr.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_tmr.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-F (..\Core\os_trace.h)(0x69A6A200)()
-F (..\Core\ucos_ii.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/ucos_ii.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-I (..\Core\os_core.c)(0x69A6A200)
-I (..\Core\os_flag.c)(0x69A6A200)
-I (..\Core\os_mbox.c)(0x69A6A200)
-I (..\Core\os_mem.c)(0x69A6A200)
-I (..\Core\os_mutex.c)(0x69A6A200)
-I (..\Core\os_q.c)(0x69A6A200)
-I (..\Core\os_sem.c)(0x69A6A200)
-I (..\Core\os_task.c)(0x69A6A200)
-I (..\Core\os_time.c)(0x69A6A200)
-I (..\Core\os_tmr.c)(0x69A6A200)
-F (..\Core\ucos_ii.h)(0x69A6A200)()
-F (..\Port\os_cpu.h)(0x69AFD826)()
-F (..\Port\os_cpu_c.c)(0x69AFE310)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/os_cpu_c.o -MMD)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-F (..\Port\os_cpu_a.s)(0x69AFE3B6)(--target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4 -I ../Start -I ../Port -I ../Cfg -I ../User-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F401xE SETA 1"-o ./objects/os_cpu_a.o)
-F (..\Cfg\app_cfg.h)(0x69AFD5DA)()
-F (..\Cfg\os_cfg.h)(0x69AFE409)()
-F (..\User\main.c)(0x69AFE268)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/main.o -MMD)
-I (..\Core\ucos_ii.h)(0x69A6A200)
-I (..\Cfg\app_cfg.h)(0x69AFD5DA)
-I (..\Cfg\os_cfg.h)(0x69AFE409)
-I (..\Port\os_cpu.h)(0x69AFD826)
-I (..\Core\os_trace.h)(0x69A6A200)
-I (..\User\led.h)(0x69AFE2B2)
-F (..\User\led.c)(0x69AFE2B2)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wall -Wextra -Wno-packed -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Cfg -I ../Core -I ../Port -I ../User-D__UVISION_VERSION="543" -DSTM32F401xE-o ./objects/led.o -MMD)
-F (..\User\led.h)(0x69AFE2B2)()
-F (..\Start\startup_stm32f401xe.s)(0x69A785A1)(--target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4 -I ../Start -I ../Port -I ../Cfg -I ../User-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F401xE SETA 1"-o ./objects/startup_stm32f401xe.o)
