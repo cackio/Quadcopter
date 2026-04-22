@@ -27,6 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdarg.h>
+#include "ucos_ii.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -37,6 +38,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+#define TASK1_STK_SIZE  128
+OS_STK Task1Stk[TASK1_STK_SIZE];  // 任务的栈内存
 
 // MPU6050 地址和寄存器
 #define MPU6050_ADDR         0xD0  // (0x68 << 1)
@@ -112,6 +116,41 @@ void MPU6050_Read_Raw(void);
 void HMC5883L_Read_Raw(void);
 void MS5611_Read_Raw(void);
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
+
+void Task1()
+{
+	while(1)
+	{
+		// ==========================================
+      // 传感器数据读取部分
+      // ==========================================
+			MPU6050_Read_Raw();
+			HMC5883L_Read_Raw();
+			MS5611_Read_Raw();
+
+			// 串口输出所有模块的原始数据
+			char data[100]; 
+			
+			// MPU6050 (Accel/Gyro) - int16_t -> %d
+			sprintf(data, "Accel: %d,%d,%d\nGyro:%d,%d,%d\n", 
+							Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW, 
+							Gyro_X_RAW, Gyro_Y_RAW, Gyro_Z_RAW);
+			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
+			
+			// HMC5883L (Magnetometer) - int16_t -> %d
+			sprintf(data, "Mag:%d,%d,%d\n",
+							Mag_X_RAW, Mag_Y_RAW, Mag_Z_RAW);
+			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
+
+			// MS5611 (Pressure/Temperature) - uint32_t -> %lu (unsigned long)
+			// MS5611的原始值较大，通常超过 16位 (65535)
+			sprintf(data, "Pre_RAW:%u Tem_RAW:%u\n", 
+							D1_Pressure_RAW, D2_Temperature_RAW);
+			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
+
+			HAL_Delay(500);
+	}
+}
 /* USER CODE END 0 */
 
 /**
@@ -150,8 +189,19 @@ int main(void)
   /* USER CODE BEGIN 2 */
 	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 	HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1); //PPM
-	All_Sensors_Init(); 
-	while (1)
+	All_Sensors_Init();
+	
+	OSInit(); //  初始化内核
+	
+	//  创建第一个任务
+	OSTaskCreate(Task1, 
+							 (void *)0, 
+							 &Task1Stk[TASK1_STK_SIZE - 1], 
+							 10); 
+	
+	
+	OSStart(); 				// 启动内核
+	/*while (1)
     {
 
       // 读取油门通道 (T8FB通常通道3是油门，对应数组下标2)
@@ -198,7 +248,7 @@ int main(void)
 			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
 
 			HAL_Delay(500);
-    }
+    }*/
   /* USER CODE END 2 */
 
   /* Infinite loop */
