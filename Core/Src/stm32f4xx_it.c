@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "ucos_ii.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -184,10 +185,20 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
   /* USER CODE BEGIN SysTick_IRQn 0 */
+  static uint8_t os_tick_divider = 0;
 
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
+  os_tick_divider++;
+  if (os_tick_divider >= 10U)
+  {
+    os_tick_divider = 0U;
+    if (OSRunning == OS_TRUE)
+    {
+      OS_CPU_SysTickHandler();
+    }
+  }
 
   /* USER CODE END SysTick_IRQn 1 */
 }

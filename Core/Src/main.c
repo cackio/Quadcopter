@@ -39,8 +39,17 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define TASK1_STK_SIZE  128
-OS_STK Task1Stk[TASK1_STK_SIZE];  // 任务的栈内存
+#define SENSOR_TASK_STK_SIZE   256
+#define MOTOR_TASK_STK_SIZE    256
+#define UART_TASK_STK_SIZE     384
+
+#define SENSOR_TASK_PRIO       8
+#define MOTOR_TASK_PRIO        7
+#define UART_TASK_PRIO         9
+
+OS_STK SensorTaskStk[SENSOR_TASK_STK_SIZE];
+OS_STK MotorTaskStk[MOTOR_TASK_STK_SIZE];
+OS_STK UartTaskStk[UART_TASK_STK_SIZE];
 
 // MPU6050 地址和寄存器
 #define MPU6050_ADDR         0xD0  // (0x68 << 1)
@@ -92,9 +101,13 @@ uint32_t D2_Temperature_RAW; // 原始温度值
 uint16_t C[7]; // C[1]~C[6] 有效
 
 // PPM 协议的 8 个通道
-uint16_t PPM_Values[8] = {1500, 1500, 1000, 1500, 1500, 1500, 1500, 1500}; 
-uint8_t  PPM_Index = 0;    // 当前正在捕获的通道
-uint32_t last_capture = 0; // 上一次捕获的时间戳
+volatile uint16_t PPM_Values[8] = {
+    1500, 1500, 1000, 1500,
+    1500, 1500, 1500, 1500
+};
+
+volatile uint8_t  PPM_Index = 0;
+volatile uint32_t last_capture = 0;
 
 /* USER CODE END PV */
 
@@ -117,39 +130,126 @@ void HMC5883L_Read_Raw(void);
 void MS5611_Read_Raw(void);
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
 
-void Task1()
+void MotorTask(void *p_arg)
 {
-	while(1)
-	{
-		// ==========================================
-      // 传感器数据读取部分
-      // ==========================================
-			MPU6050_Read_Raw();
-			HMC5883L_Read_Raw();
-			MS5611_Read_Raw();
+		OS_CPU_SR cpu_sr = 0;
+    uint16_t throttle_input;
 
-			// 串口输出所有模块的原始数据
-			char data[100]; 
-			
-			// MPU6050 (Accel/Gyro) - int16_t -> %d
-			sprintf(data, "Accel: %d,%d,%d\nGyro:%d,%d,%d\n", 
-							Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW, 
-							Gyro_X_RAW, Gyro_Y_RAW, Gyro_Z_RAW);
-			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
-			
-			// HMC5883L (Magnetometer) - int16_t -> %d
-			sprintf(data, "Mag:%d,%d,%d\n",
-							Mag_X_RAW, Mag_Y_RAW, Mag_Z_RAW);
-			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
+    (void)p_arg;
 
-			// MS5611 (Pressure/Temperature) - uint32_t -> %lu (unsigned long)
-			// MS5611的原始值较大，通常超过 16位 (65535)
-			sprintf(data, "Pre_RAW:%u Tem_RAW:%u\n", 
-							D1_Pressure_RAW, D2_Temperature_RAW);
-			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
+    while (1)
+    {
+        /*
+         * T8FB 一般通道 3 是油门，对应数组下标 2
+         * 为了防止中断正在改 PPM_Values，这里关中断短暂读取。
+         */
+        OS_ENTER_CRITICAL();
+        throttle_input = PPM_Values[2];
+        OS_EXIT_CRITICAL();
 
-			HAL_Delay(500);
-	}
+        /*
+         * 信号异常保护
+         */
+        if (throttle_input < 900 || throttle_input > 2200)
+        {
+            throttle_input = 1000;
+        }
+
+        /*
+         * 四路电机同步油门
+         */
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_1, throttle_input);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_2, throttle_input);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_3, throttle_input);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_4, throttle_input);
+
+        /*
+         * 电机控制一般 20ms 更新一次
+         */
+        OSTimeDlyHMSM(0, 0, 0, 20);
+    }
+}
+void SensorTask(void *p_arg)
+{
+    (void)p_arg;
+
+    while (1)
+    {
+        MPU6050_Read_Raw();
+        HMC5883L_Read_Raw();
+        MS5611_Read_Raw();
+
+        /*
+         * 传感器读取周期可以先设 50ms。
+         * 后面做姿态解算时，MPU6050 可以单独提高到 5ms 或 10ms。
+         */
+        OSTimeDlyHMSM(0, 0, 0, 50);
+    }
+}
+void UartTask(void *p_arg)
+{
+		OS_CPU_SR cpu_sr = 0;
+    char data[160];
+
+    int16_t ax, ay, az;
+    int16_t gx, gy, gz;
+    int16_t mx, my, mz;
+    uint32_t p_raw, t_raw;
+    uint16_t throttle;
+
+    (void)p_arg;
+
+    HAL_UART_Transmit(&huart1,
+                      (uint8_t *)"UartTask running\r\n",
+                      18,
+                      300);
+
+    while (1)
+    {
+        /*
+         * 拷贝一份全局变量，防止打印过程中数据被传感器任务改动。
+         */
+        OS_ENTER_CRITICAL();
+
+        ax = Accel_X_RAW;
+        ay = Accel_Y_RAW;
+        az = Accel_Z_RAW;
+
+        gx = Gyro_X_RAW;
+        gy = Gyro_Y_RAW;
+        gz = Gyro_Z_RAW;
+
+        mx = Mag_X_RAW;
+        my = Mag_Y_RAW;
+        mz = Mag_Z_RAW;
+
+        p_raw = D1_Pressure_RAW;
+        t_raw = D2_Temperature_RAW;
+
+        throttle = PPM_Values[2];
+
+        OS_EXIT_CRITICAL();
+
+        snprintf(data, sizeof(data),
+                 "THR:%u\r\n"
+                 "Accel:%d,%d,%d\r\n"
+                 "Gyro:%d,%d,%d\r\n"
+                 "Mag:%d,%d,%d\r\n"
+                 "Pre_RAW:%lu Tem_RAW:%lu\r\n\r\n",
+                 throttle,
+                 ax, ay, az,
+                 gx, gy, gz,
+                 mx, my, mz,
+                 (unsigned long)p_raw,
+                 (unsigned long)t_raw);
+
+        HAL_UART_Transmit(&huart1,
+                          (uint8_t *)data,
+                          strlen(data),
+                          300);
+
+        OSTimeDlyHMSM(0, 0, 0, 500);
+    }
 }
 /* USER CODE END 0 */
 
@@ -160,106 +260,87 @@ void Task1()
 int main(void)
 {
 
-  /* USER CODE BEGIN 1 */
+		/* USER CODE BEGIN 1 */
+		INT8U os_err;
+
+		HAL_Init();
+
+    SystemClock_Config();
+
+    MX_GPIO_Init();
+    MX_I2C1_Init();
+    MX_USART1_UART_Init();
+    MX_TIM3_Init();
+    MX_TIM2_Init();
+
+		HAL_UART_Transmit(&huart1,
+                  (uint8_t *)"BOOT OK\r\n",
+                  9,
+                  1000);
+    /*
+     * 启动四路 PWM
+     * 如果你实际只接了一个电机，也可以只启动对应通道。
+     */
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
+    /*
+     * 启动 PPM 输入捕获中断
+     */
+    HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+
+    /*
+     * 初始化传感器
+     */
+    All_Sensors_Init();
+
+    /*
+     * 初始化 uC/OS-II
+     */
+    OSInit();
+
+    /*
+     * 创建任务
+     */
+    os_err = OSTaskCreate(MotorTask,
+                          (void *)0,
+                          &MotorTaskStk[MOTOR_TASK_STK_SIZE - 1],
+                          MOTOR_TASK_PRIO);
+    if (os_err != OS_ERR_NONE)
+    {
+        Error_Handler();
+    }
+
+    os_err = OSTaskCreate(SensorTask,
+                          (void *)0,
+                          &SensorTaskStk[SENSOR_TASK_STK_SIZE - 1],
+                          SENSOR_TASK_PRIO);
+    if (os_err != OS_ERR_NONE)
+    {
+        Error_Handler();
+    }
+
+    os_err = OSTaskCreate(UartTask,
+                          (void *)0,
+                          &UartTaskStk[UART_TASK_STK_SIZE - 1],
+                          UART_TASK_PRIO);
+    if (os_err != OS_ERR_NONE)
+    {
+        Error_Handler();
+    }
+
+    OSStart();
 
   /* USER CODE END 1 */
 
-  /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_I2C1_Init();
-  MX_USART1_UART_Init();
-  MX_TIM3_Init();
-  MX_TIM2_Init();
-  /* USER CODE BEGIN 2 */
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
-	HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1); //PPM
-	All_Sensors_Init();
-	
-	OSInit(); //  初始化内核
-	
-	//  创建第一个任务
-	OSTaskCreate(Task1, 
-							 (void *)0, 
-							 &Task1Stk[TASK1_STK_SIZE - 1], 
-							 10); 
-	
-	
-	OSStart(); 				// 启动内核
-	/*while (1)
-    {
-
-      // 读取油门通道 (T8FB通常通道3是油门，对应数组下标2)
-      uint16_t throttle_input = PPM_Values[2]; 
-
-      // 信号丢失或异常，强制归零
-      if (throttle_input < 900 || throttle_input > 2200) {
-          throttle_input = 1000;
-      }
-
-      // 将油门值应用到电机
-			Motor_SetSpeed(&htim3, TIM_CHANNEL_1, throttle_input);
-			Motor_SetSpeed(&htim3, TIM_CHANNEL_2, throttle_input);
-			Motor_SetSpeed(&htim3, TIM_CHANNEL_3, throttle_input);
-      Motor_SetSpeed(&htim3, TIM_CHANNEL_4, throttle_input);
-			
-
-
-      // ==========================================
-      // 传感器数据读取部分
-      // ==========================================
-			MPU6050_Read_Raw();
-			HMC5883L_Read_Raw();
-			MS5611_Read_Raw();
-
-			// 串口输出所有模块的原始数据
-			char data[100]; 
-			
-			// MPU6050 (Accel/Gyro) - int16_t -> %d
-			sprintf(data, "Accel: %d,%d,%d\nGyro:%d,%d,%d\n", 
-							Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW, 
-							Gyro_X_RAW, Gyro_Y_RAW, Gyro_Z_RAW);
-			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
-			
-			// HMC5883L (Magnetometer) - int16_t -> %d
-			sprintf(data, "Mag:%d,%d,%d\n",
-							Mag_X_RAW, Mag_Y_RAW, Mag_Z_RAW);
-			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
-
-			// MS5611 (Pressure/Temperature) - uint32_t -> %lu (unsigned long)
-			// MS5611的原始值较大，通常超过 16位 (65535)
-			sprintf(data, "Pre_RAW:%u Tem_RAW:%u\n", 
-							D1_Pressure_RAW, D2_Temperature_RAW);
-			HAL_UART_Transmit(&huart1, (uint8_t *)data, strlen(data), 0xFFFF);
-
-			HAL_Delay(500);
-    }*/
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 		
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-  }
   /* USER CODE END 3 */
 }
 

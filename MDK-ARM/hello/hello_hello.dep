@@ -1,7 +1,7 @@
 Dependencies for Project 'hello', Target 'hello': (DO NOT MODIFY !)
 CompilerVersion: 6240000::V6.24::ARMCLANG
-F (startup_stm32f401xe.s)(0x69A6841E)(--target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F401xE SETA 1" -Wa,armasm,--pd,"_RTE_ SETA 1"-o hello/startup_stm32f401xe.o)
-F (../Core/Src/main.c)(0x69E1DE09)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/main_1.o -MMD)
+F (startup_stm32f401xe.s)(0x6A3D20B7)(--target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F401xE SETA 1" -Wa,armasm,--pd,"_RTE_ SETA 1"-o hello/startup_stm32f401xe.o)
+F (../Core/Src/main.c)(0x6A3D20B6)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/main_1.o -MMD)
 I (..\Core\Inc\main.h)(0x68C0F247)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal.h)(0x68C0161E)
 I (..\Core\Inc\stm32f4xx_hal_conf.h)(0x6909DBDC)
@@ -33,11 +33,11 @@ I (..\Core\Inc\i2c.h)(0x68E7A224)
 I (..\Core\Inc\tim.h)(0x694F4955)
 I (..\Core\Inc\usart.h)(0x6900791C)
 I (..\Core\Inc\gpio.h)(0x68C01A5F)
-I (..\ucos\Core\ucos_ii.h)(0x69A6A200)
-I (..\ucos\Cfg\app_cfg.h)(0x69E18AF0)
-I (..\ucos\Cfg\os_cfg.h)(0x69E18C1D)
-I (..\ucos\Port\os_cpu.h)(0x69E18510)
-I (..\ucos\Core\os_trace.h)(0x69A6A200)
+I (..\ucos\Core\ucos_ii.h)(0x69E81F10)
+I (..\ucos\Cfg\app_cfg.h)(0x69E81F10)
+I (..\ucos\Cfg\os_cfg.h)(0x69E81F10)
+I (..\ucos\Port\os_cpu.h)(0x69E81F10)
+I (..\ucos\Core\os_trace.h)(0x69E81F10)
 F (../Core/Src/gpio.c)(0x68E7A224)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/gpio.o -MMD)
 I (..\Core\Inc\gpio.h)(0x68C01A5F)
 I (..\Core\Inc\main.h)(0x68C0F247)
@@ -154,7 +154,7 @@ I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_pwr_ex.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h)(0x68C0161E)
-F (../Core/Src/stm32f4xx_it.c)(0x694F4955)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/stm32f4xx_it.o -MMD)
+F (../Core/Src/stm32f4xx_it.c)(0x6A3D20B6)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/stm32f4xx_it.o -MMD)
 I (..\Core\Inc\main.h)(0x68C0F247)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal.h)(0x68C0161E)
 I (..\Core\Inc\stm32f4xx_hal_conf.h)(0x6909DBDC)
@@ -183,6 +183,11 @@ I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h)(0x68C0161E)
 I (..\Core\Inc\stm32f4xx_it.h)(0x694F4955)
+I (..\ucos\Core\ucos_ii.h)(0x69E81F10)
+I (..\ucos\Cfg\app_cfg.h)(0x69E81F10)
+I (..\ucos\Cfg\os_cfg.h)(0x69E81F10)
+I (..\ucos\Port\os_cpu.h)(0x69E81F10)
+I (..\ucos\Core\os_trace.h)(0x69E81F10)
 F (../Core/Src/stm32f4xx_hal_msp.c)(0x691ECADF)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/stm32f4xx_hal_msp.o -MMD)
 I (..\Core\Inc\main.h)(0x68C0F247)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal.h)(0x68C0161E)
@@ -724,48 +729,48 @@ I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_pwr_ex.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h)(0x68C0161E)
 I (..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h)(0x68C0161E)
-F (..\ucos\Cfg\app_cfg.h)(0x69E18AF0)()
-F (..\ucos\Cfg\os_cfg.h)(0x69E18C1D)()
-F (..\ucos\Port\os_cpu.h)(0x69E18510)()
-F (..\ucos\Port\os_cpu_a.s)(0x69E18369)(--target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F401xE SETA 1" -Wa,armasm,--pd,"_RTE_ SETA 1"-o hello/os_cpu_a.o)
-F (..\ucos\Port\os_cpu_c.c)(0x69E1DA36)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/os_cpu_c.o -MMD)
-I (..\ucos\Core\ucos_ii.h)(0x69A6A200)
-I (..\ucos\Cfg\app_cfg.h)(0x69E18AF0)
-I (..\ucos\Cfg\os_cfg.h)(0x69E18C1D)
-I (..\ucos\Port\os_cpu.h)(0x69E18510)
-I (..\ucos\Core\os_trace.h)(0x69A6A200)
-F (..\ucos\Core\os.h)(0x69A6A200)()
-F (..\ucos\Core\os_core.c)(0x69A6A200)()
-F (..\ucos\Core\os_dbg_r.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/os_dbg_r.o -MMD)
-I (..\ucos\Core\ucos_ii.h)(0x69A6A200)
-I (..\ucos\Cfg\app_cfg.h)(0x69E18AF0)
-I (..\ucos\Cfg\os_cfg.h)(0x69E18C1D)
-I (..\ucos\Port\os_cpu.h)(0x69E18510)
-I (..\ucos\Core\os_trace.h)(0x69A6A200)
-F (..\ucos\Core\os_flag.c)(0x69A6A200)()
-F (..\ucos\Core\os_mbox.c)(0x69A6A200)()
-F (..\ucos\Core\os_mem.c)(0x69A6A200)()
-F (..\ucos\Core\os_mutex.c)(0x69A6A200)()
-F (..\ucos\Core\os_q.c)(0x69A6A200)()
-F (..\ucos\Core\os_sem.c)(0x69A6A200)()
-F (..\ucos\Core\os_task.c)(0x69A6A200)()
-F (..\ucos\Core\os_time.c)(0x69A6A200)()
-F (..\ucos\Core\os_tmr.c)(0x69A6A200)()
-F (..\ucos\Core\os_trace.h)(0x69A6A200)()
-F (..\ucos\Core\ucos_ii.c)(0x69A6A200)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/ucos_ii.o -MMD)
-I (..\ucos\Core\ucos_ii.h)(0x69A6A200)
-I (..\ucos\Cfg\app_cfg.h)(0x69E18AF0)
-I (..\ucos\Cfg\os_cfg.h)(0x69E18C1D)
-I (..\ucos\Port\os_cpu.h)(0x69E18510)
-I (..\ucos\Core\os_trace.h)(0x69A6A200)
-I (..\ucos\Core\os_core.c)(0x69A6A200)
-I (..\ucos\Core\os_flag.c)(0x69A6A200)
-I (..\ucos\Core\os_mbox.c)(0x69A6A200)
-I (..\ucos\Core\os_mem.c)(0x69A6A200)
-I (..\ucos\Core\os_mutex.c)(0x69A6A200)
-I (..\ucos\Core\os_q.c)(0x69A6A200)
-I (..\ucos\Core\os_sem.c)(0x69A6A200)
-I (..\ucos\Core\os_task.c)(0x69A6A200)
-I (..\ucos\Core\os_time.c)(0x69A6A200)
-I (..\ucos\Core\os_tmr.c)(0x69A6A200)
-F (..\ucos\Core\ucos_ii.h)(0x69A6A200)()
+F (..\ucos\Cfg\app_cfg.h)(0x69E81F10)()
+F (..\ucos\Cfg\os_cfg.h)(0x69E81F10)()
+F (..\ucos\Port\os_cpu.h)(0x69E81F10)()
+F (..\ucos\Port\os_cpu_a.s)(0x69E81F10)(--target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F401xE SETA 1" -Wa,armasm,--pd,"_RTE_ SETA 1"-o hello/os_cpu_a.o)
+F (..\ucos\Port\os_cpu_c.c)(0x69E81F10)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/os_cpu_c.o -MMD)
+I (..\ucos\Core\ucos_ii.h)(0x69E81F10)
+I (..\ucos\Cfg\app_cfg.h)(0x69E81F10)
+I (..\ucos\Cfg\os_cfg.h)(0x69E81F10)
+I (..\ucos\Port\os_cpu.h)(0x69E81F10)
+I (..\ucos\Core\os_trace.h)(0x69E81F10)
+F (..\ucos\Core\os.h)(0x69E81F10)()
+F (..\ucos\Core\os_core.c)(0x69E81F10)()
+F (..\ucos\Core\os_dbg_r.c)(0x69E81F10)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/os_dbg_r.o -MMD)
+I (..\ucos\Core\ucos_ii.h)(0x69E81F10)
+I (..\ucos\Cfg\app_cfg.h)(0x69E81F10)
+I (..\ucos\Cfg\os_cfg.h)(0x69E81F10)
+I (..\ucos\Port\os_cpu.h)(0x69E81F10)
+I (..\ucos\Core\os_trace.h)(0x69E81F10)
+F (..\ucos\Core\os_flag.c)(0x69E81F10)()
+F (..\ucos\Core\os_mbox.c)(0x69E81F10)()
+F (..\ucos\Core\os_mem.c)(0x69E81F10)()
+F (..\ucos\Core\os_mutex.c)(0x69E81F10)()
+F (..\ucos\Core\os_q.c)(0x69E81F10)()
+F (..\ucos\Core\os_sem.c)(0x69E81F10)()
+F (..\ucos\Core\os_task.c)(0x69E81F10)()
+F (..\ucos\Core\os_time.c)(0x69E81F10)()
+F (..\ucos\Core\os_tmr.c)(0x69E81F10)()
+F (..\ucos\Core\os_trace.h)(0x69E81F10)()
+F (..\ucos\Core\ucos_ii.c)(0x69E81F10)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O0 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../ucos/Cfg -I ../ucos/Core -I ../ucos/Port-I./RTE/_hello-IF:/keilmdk/Arm/Packs/ARM/CMSIS/6.1.0/CMSIS/Core/Include-D__UVISION_VERSION="543" -DSTM32F401xE -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F401xE-o hello/ucos_ii.o -MMD)
+I (..\ucos\Core\ucos_ii.h)(0x69E81F10)
+I (..\ucos\Cfg\app_cfg.h)(0x69E81F10)
+I (..\ucos\Cfg\os_cfg.h)(0x69E81F10)
+I (..\ucos\Port\os_cpu.h)(0x69E81F10)
+I (..\ucos\Core\os_trace.h)(0x69E81F10)
+I (..\ucos\Core\os_core.c)(0x69E81F10)
+I (..\ucos\Core\os_flag.c)(0x69E81F10)
+I (..\ucos\Core\os_mbox.c)(0x69E81F10)
+I (..\ucos\Core\os_mem.c)(0x69E81F10)
+I (..\ucos\Core\os_mutex.c)(0x69E81F10)
+I (..\ucos\Core\os_q.c)(0x69E81F10)
+I (..\ucos\Core\os_sem.c)(0x69E81F10)
+I (..\ucos\Core\os_task.c)(0x69E81F10)
+I (..\ucos\Core\os_time.c)(0x69E81F10)
+I (..\ucos\Core\os_tmr.c)(0x69E81F10)
+F (..\ucos\Core\ucos_ii.h)(0x69E81F10)()
