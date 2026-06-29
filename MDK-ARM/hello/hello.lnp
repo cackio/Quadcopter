@@ -7,6 +7,7 @@
 "hello\usart.o"
 "hello\stm32f4xx_it.o"
 "hello\stm32f4xx_hal_msp.o"
+"hello\bsp.o"
 "hello\stm32f4xx_hal_i2c.o"
 "hello\stm32f4xx_hal_i2c_ex.o"
 "hello\stm32f4xx_hal_rcc.o"
@@ -30,6 +31,10 @@
 "hello\os_cpu_c.o"
 "hello\os_dbg_r.o"
 "hello\ucos_ii.o"
+"hello\segger_sysview.o"
+"hello\segger_sysview_config_ucosii.o"
+"hello\segger_sysview_ucosii.o"
+"hello\segger_rtt.o"
 --strict --scatter "hello\hello.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

@@ -25,6 +25,12 @@ hello/stm32f4xx_it.o: ..\Core\Src\stm32f4xx_it.c ..\Core\Inc\main.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h \
-  ..\Core\Inc\stm32f4xx_it.h ..\ucos\Core\ucos_ii.h \
+  ..\Core\Inc\stm32f4xx_it.h ..\Core\Inc\bsp.h ..\ucos\Core\ucos_ii.h \
   ..\ucos\Cfg\app_cfg.h ..\ucos\Cfg\os_cfg.h ..\ucos\Port\os_cpu.h \
-  ..\ucos\Core\os_trace.h
+  ..\ucos\Core\os_trace.h ..\SEGGER\Systemview\os_trace_events.h \
+  ..\SEGGER\Systemview\SEGGER_SYSVIEW.h ..\SEGGER\Systemview\SEGGER.h \
+  ..\SEGGER\Systemview\Global.h \
+  ..\SEGGER\Systemview\SEGGER_SYSVIEW_ConfDefaults.h \
+  ..\SEGGER\Systemview\SEGGER_SYSVIEW_Conf.h \
+  ..\SEGGER\RTT\SEGGER_RTT_ConfDefaults.h \
+  ..\SEGGER\RTT\SEGGER_RTT_Conf.h ..\SEGGER\Systemview\os_cfg_trace.h

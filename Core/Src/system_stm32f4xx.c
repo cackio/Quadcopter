@@ -134,9 +134,19 @@
                is no need to call the 2 first functions listed above, since SystemCoreClock
                variable is updated automatically.
   */
-uint32_t SystemCoreClock = 16000000;
+//uint32_t SystemCoreClock = 16000000;
+uint32_t SystemCoreClock = 84000000;
 const uint8_t AHBPrescTable[16] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 6, 7, 8, 9};
 const uint8_t APBPrescTable[8]  = {0, 0, 0, 0, 1, 2, 3, 4};
+
+
+//没人改它的时候，默认就是84MHZ，我们可以直接使用
+//在文件system_stm32f4xx.c里
+//
+#if defined(STM32F401xx)
+	uint32_t SystemCoreClock = 84000000;
+#endif /* STM32F401xx */
+
 /**
   * @}
   */

@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f4xx_it.h"
+#include "bsp.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "ucos_ii.h"
@@ -218,7 +219,13 @@ void TIM2_IRQHandler(void)
   /* USER CODE BEGIN TIM2_IRQn 0 */
 
   /* USER CODE END TIM2_IRQn 0 */
+	
+  OSIntEnter();                     // ← ★ 添加：通知 uC/OS-II 进入 ISR
+
   HAL_TIM_IRQHandler(&htim2);
+
+  OSIntExit();                      // ← ★ 添加：通知 uC/OS-II 退出 ISR
+
   /* USER CODE BEGIN TIM2_IRQn 1 */
 
   /* USER CODE END TIM2_IRQn 1 */
@@ -232,7 +239,13 @@ void USART1_IRQHandler(void)
   /* USER CODE BEGIN USART1_IRQn 0 */
 
   /* USER CODE END USART1_IRQn 0 */
+	
+  OSIntEnter();                     // ← ★ 添加：通知 uC/OS-II 进入 ISR
+
   HAL_UART_IRQHandler(&huart1);
+
+  OSIntExit();                      // ← ★ 添加：通知 uC/OS-II 退出 ISR
+	
   /* USER CODE BEGIN USART1_IRQn 1 */
 
   /* USER CODE END USART1_IRQn 1 */
