@@ -39,6 +39,7 @@
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
 
 #define SENSOR_TASK_STK_SIZE   256
 #define MOTOR_TASK_STK_SIZE    256
@@ -50,12 +51,20 @@
 #define MOTOR_TASK_PRIO        7
 #define UART_TASK_PRIO         9
 
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
 OS_STK StartTaskStk[START_TASK_STK_SIZE];
 OS_STK SensorTaskStk[SENSOR_TASK_STK_SIZE];
 OS_STK MotorTaskStk[MOTOR_TASK_STK_SIZE];
 OS_STK UartTaskStk[UART_TASK_STK_SIZE];
-
-
+/* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
@@ -233,12 +242,19 @@ int main(void)
   /* USER CODE END 1 */
 
 
+  /* USER CODE BEGIN 2 */
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-		
-  /* USER CODE END 3 */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+    /* USER CODE END 3 */
+  }
 }
 
 /**

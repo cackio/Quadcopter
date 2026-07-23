@@ -1,0 +1,89 @@
+
+# ---------------- Keil MDK 构建产物 ----------------
+# 目标文件 / 依赖文件 / 链接输出
+*.o
+*.d
+*.axf
+*.hex
+*.bin
+*.map
+*.lnp
+*.sct
+*.dep
+*.htm
+*.asm
+*.s
+*.iex
+
+# 列出文件 / 编译日志
+*.build_log.htm
+*_hello.dep
+
+# Keil 中间输出目录
+MDK-ARM/hello/
+MDK-ARM/Objects/
+MDK-ARM/Listings/
+
+# ---------------- Keil IDE 用户相关文件 ----------------
+# UV4/UV5 窗口布局 (与用户/屏幕相关, 每台机器不同)
+*.uvguix.*
+*.uvguix
+
+# 调试会话日志
+JLinkLog.txt
+JLinkSettings.ini
+
+# 事件记录器 stub
+EventRecorderStub.scvd
+
+# DebugConfig (一般无需入库, 由 RTE 自动生成)
+MDK-ARM/DebugConfig/
+
+# RTE 运行时 (按需保留, 通常 .dbgconf 是工具生成的, 可忽略)
+MDK-ARM/RTE/Device/
+
+# ---------------- STM32CubeMX / CubeIDE ----------------
+.mxproject
+.cproject
+.project
+.settings/
+
+# ---------------- SEGGER / 调试辅助文件 ----------------
+*.SVD
+*.sfr
+
+# ---------------- 操作系统 / 编辑器产物 ----------------
+# Windows
+Thumbs.db
+ehthumbs.db
+ehthumbs_view.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.fuse_hidden*
+.Trash-*
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.bak
+*.tmp
+*.temp
+
+# ---------------- 临时 / 备份 ----------------
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
