@@ -87,3 +87,8 @@ $RECYCLE.BIN/
 *.bak
 *.orig
 *.rej
+# Local tests, builds and captures
+build/
+__pycache__/
+.pytest_cache/
+captures/

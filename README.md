@@ -1,154 +1,58 @@
-# Quadcopter 四轴飞行器
+# Quadcopter 姿态解算调试工程
 
-> 基于 STM32F401 + uC/OS-II + SEGGER SystemView 的飞控固件
+STM32F401RE（84 MHz）＋μC/OS-II＋MPU6050/HMC5883L＋JDY-31-SPP。
 
-[![MCU](https://img.shields.io/badge/MCU-STM32F401RE-03234B?logo=stmicroelectronics)](https://www.st.com/)
-[![RTOS](https://img.shields.io/badge/RTOS-uC/OS--II-orange)](https://westes.github.io/ucos/)
-[![Toolchain](https://img.shields.io/badge/Toolchain-Keil%20MDK%20%2B%20ARMCLANG%20V6-blue)](https://www.keil.com/)
-[![Trace](https://img.shields.io/badge/Trace-SEGGER%20SystemView-green)](https://www.segger.com/products/development-tools/systemview/)
-[![Status](https://img.shields.io/badge/Status-底层骨架%20完成-yellow)]()
+当前版本完成 Madgwick 六轴／九轴融合、定时采样、匿名 V7 上报与电脑端校准工具。**用于拆桨台架，四路电机信号强制低电平，不提供解锁或飞行控制。**
 
----
+## 先看这里
 
-## 📋 项目简介
+- [姿态解算调试手册](docs/姿态解算调试手册.md)：从固定帧、原始数据、轴映射、六轴到磁场校准和九轴的完整步骤。
+- [软件验证记录](docs/软件验证记录.md)：编译、自动测试及尚未做的实机验证。
+- `Core/Inc/flight_config.h`：串口、算法、上报模式和增益。
+- `Core/Inc/sensor_calibration.h`：原生坐标标定参数与两个独立的轴映射矩阵。
 
-本项目实现四轴飞行器飞控的**底层骨架**，已完成：
+## 默认配置
 
-- 多任务实时调度（uC/OS-II）
-- 传感器数据采集（IMU / 磁力计 / 气压计）
-- 遥控器 PPM 信号解析
-- 电机 PWM 输出
-- 任务级调试信息打印（UART）
-- SEGGER SystemView 实时跟踪
+| 功能 | 配置 |
+|---|---|
+| MPU6050／姿态任务 | 200 Hz，TIM4 事件唤醒，优先级 7 |
+| 时间源 | TIM2 1 MHz，支持 32 位微秒回绕 |
+| 磁力计 | HMC5883L H43，30 Hz，检查新数据 |
+| 蓝牙 UART | USART1 PA9/PA10，9600 8N1 |
+| 普通上报 | 匿名 V7 欧拉角 20 Hz；115200 时欧拉角和四元数各 50 Hz |
+| 诊断模式 | 私有二进制帧 10 Hz，电脑工具解码、保存和回放 |
+| 启动校准 | 约 1 秒预热＋5 秒静止陀螺仪校准，移动则重新累计 |
+| 初始融合 | 六轴；安装方向和磁场参数未确认，九轴不会默认启用 |
+| PPM | TIM2_CH1 PA0，仅监测 4–8 通道完整帧，100 ms 过期 |
+| 电机／气压计 | 电机信号关闭；气压计不进入本次采样链路 |
 
-**未完成**（下一阶段）：姿态解算（Mahony / 四元数）、PID 控制环、飞行模式切换。
+原 SensorTask/MotorTask/UartTask 与散落的传感器全局量，已替换为姿态任务、遥测任务和 `Flight_GetSnapshot()` 一致快照。I2C 只由姿态任务访问。蓝牙上不再混发启动字符串，日志走 RTT 通道 0。
 
----
+## 编译与检查
 
-## 🛠️ 硬件平台
+Keil 打开 `MDK-ARM/hello.uvprojx`，使用 ARMCLANG V6，F7 编译。也可在工程根目录运行：
 
-| 模块 | 型号 | 接口 |
-|------|------|------|
-| MCU | STM32F401RETx (Cortex-M4, 84 MHz) | — |
-| IMU | MPU6050 (6 轴) | I2C1 |
-| 磁力计 | HMC5883L (3 轴, MPU6050 旁路) | I2C1 |
-| 气压计 | MS5611 | I2C1 |
-| 遥控 | T8FB (PPM) | TIM2_CH1 |
-| 电机 | ×4 | TIM3_CH1~4 |
-| 调试串口 | USART1 | 9600 8N1 |
-| 调试器 | J-Link / ST-Link | SWD |
-
-### 时钟配置
-
-- HSE = 8 MHz → PLL × 84 → SYSCLK = **84 MHz**
-- APB1 = 42 MHz, APB2 = 84 MHz
-- TIM3 (电机 PWM): 50 Hz, 周期 20 ms
-- TIM2 (PPM 捕获): 1 MHz 计数频率
-
----
-
-## ⚙️ 软件架构
-
-### 任务划分
-
-| 任务 | 优先级 | 周期 | 功能 |
-|------|--------|------|------|
-| `StartTask` | 5 | 一次性 | BSP 初始化 + 创建子任务后自删 |
-| `MotorTask` | 7 | 20 ms | 读取油门 → 输出 4 路 PWM |
-| `SensorTask` | 8 | 50 ms | 轮询 MPU6050 / HMC5883L / MS5611 |
-| `UartTask` | 9 | 500 ms | 串口打印传感器原始数据 |
-
-> uC/OS-II 中**优先级数字越小，优先级越高**（0 最高，`OS_LOWEST_PRIO` 最低）。
-> 共享变量（如 `PPM_Values`、`Accel_X_RAW`）通过 `OS_ENTER_CRITICAL()` / `OS_EXIT_CRITICAL()` 保护。
-
-### 软件栈
-
-```
-┌────────────────────────────────────────┐
-│        应用任务层 (uC/OS-II Tasks)       │
-│  StartTask / MotorTask / SensorTask /  │
-│              UartTask                  │
-├────────────────────────────────────────┤
-│   Board Support Package  (bsp.c/h)     │
-│  MPU6050 / HMC5883L / MS5611 / Motor / │
-│  PPM / DWT                             │
-├────────────────────────────────────────┤
-│   STM32 HAL + CMSIS                    │
-├────────────────────────────────────────┤
-│   SEGGER RTT  +  SystemView  (Trace)   │
-└────────────────────────────────────────┘
+```powershell
+python tools/build_firmware.py
+python tools/build_firmware.py --name fixed9600 --define FLIGHT_TELEMETRY_MODE=2
+python tools/build_firmware.py --name diag9600 --define FLIGHT_TELEMETRY_MODE=1
+python tools/run_tests.py
 ```
 
----
+命令行生成 `build/<name>/quadcopter.axf`、`.hex`、`.map`、`build.log`，不自动烧录。`--define` 不修改工程头文件，Keil F8 也不会自动下载这些输出目录中的文件，务必确认本次下载的产物。
 
-## 📂 目录结构
+固定帧模式先验证电脑连接；诊断模式使用：
 
-```
-Quadcopter/
-├── Core/                  # 应用层 (main.c / bsp.c / ...)
-├── Drivers/               # HAL + CMSIS
-├── ucos/                  # uC/OS-II 移植
-├── SEGGER/                # RTT + SystemView
-└── MDK-ARM/               # Keil 工程
-    └── hello.uvprojx
+```powershell
+python tools/capture.py --list
+python tools/capture.py --port COM12 --seconds 150 --output captures/mag.csv
+python tools/calibrate.py mag --input captures/mag.csv
 ```
 
----
+COM12 是先前查到的设备记录，现场重新核对。生成参数默认写入 `build/calibration/sensor_calibration.h`，检查质量后再复制到工程，不能将默认单位矩阵当作你们的真实标定结果。
 
-## 🚀 快速开始
+## 目录与依赖
 
-### 编译
+`Core/` 为应用与驱动，`ucos/` 为内核和移植，`SEGGER/` 保留 RTT/SystemView，`tools/` 为构建与校准工具，`tests/` 对实际 C 实现进行电脑端测试。Python 依赖见 `tools/requirements.txt`；本机原生测试编译器为 Qt 附带的 MinGW，可用环境变量 `QUADCOPTER_HOST_CC` 指定其他 gcc。
 
-1. 用 **Keil MDK V5.30+** 打开 `MDK-ARM/hello.uvprojx`
-2. 编译器选择 **ARMCLANG V6**（项目默认）
-3. `F7` 编译
-
-> ⚠️ **常见错误**：`SEGGER_RTT_ConfDefaults.h` 找不到 → 从 [SEGGER 官方 RTT 仓库](https://github.com/SEGGERMicro/RTT) 下载该文件，放入 `SEGGER/RTT/` 目录。
-
-### 烧录 & 运行
-
-- 用 **J-Link** 或 **ST-Link** 连接 SWD 接口
-- Keil 中 `F8` 下载 `hello.axf`
-- 打开串口工具（9600 8N1）观察打印：
-
-```
-BOOT OK
-BSP Init OK
-UartTask running
-THR:1000
-Accel:0,0,16384
-Gyro:0,0,0
-Mag:0,0,0
-Pre_RAW:0 Tem_RAW:0
-...
-```
-
----
-
-## 📊 SystemView 调试
-
-SystemView 用于实时观察任务调度、ISR、中断响应时间。
-
-### 上位机
-
-1. 打开 [SEGGER SystemView](https://www.segger.com/downloads/systemview/)
-2. 菜单 `Target → Recorder Configuration`：
-   - Target Connection: **J-Link**
-   - Interface: **SWD**
-   - Target Device: **STM32F401RE**
-3. 点击 `Start Recording` 开始录制
-
----
-
-## ✅ 后续路线
-
-- [ ] 姿态解算（互补滤波 / Mahony / EKF）
-- [ ] 串级 PID（角度环 + 角速度环）
-- [ ] 飞行模式（自稳 / 定高 / 定点）
-- [ ] 安全保护（信号丢失自动降落）
-
----
-
-## 许可
-
-本项目为本科综合设计用途。HAL/CMSIS 来自 ST 官方，uC/OS-II 来自 Micrium，SystemView 来自 SEGGER —— 各自遵循对应许可。
+HAL/CMSIS、μC/OS-II、SEGGER 代码保留原有许可。姿态算法依据 Madgwick 梯度下降方法实现，使用显式 dt；本版本尚未完成机架实测或飞行验收。

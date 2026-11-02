@@ -21,7 +21,7 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-
+#include "flight_config.h"
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart1;
@@ -51,8 +51,12 @@ void MX_USART1_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
+/* Keep this override in a USER block so CubeMX regeneration preserves it. */
+  if(huart1.Init.BaudRate!=FLIGHT_UART_BAUD){
+    huart1.Init.BaudRate=FLIGHT_UART_BAUD;
+    if(HAL_UART_Init(&huart1)!=HAL_OK)Error_Handler();
+  }
+/* USER CODE END USART1_Init 2 */
 
 }
 
@@ -81,7 +85,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
     /* USART1 interrupt Init */
-    HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(USART1_IRQn, 7, 0);
     HAL_NVIC_EnableIRQ(USART1_IRQn);
   /* USER CODE BEGIN USART1_MspInit 1 */
 

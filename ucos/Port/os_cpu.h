@@ -12,7 +12,7 @@ extern  "C" {                                    /* See Note #1.                
 #endif
 
 #ifndef  OS_CPU_EXCEPT_STK_SIZE
-#define  OS_CPU_EXCEPT_STK_SIZE      256u        /* Default exception stack size is 256 OS_STK entries */
+#define  OS_CPU_EXCEPT_STK_SIZE      512u        /* Exception stack size is 512 OS_STK entries         */
 #endif
 
 #ifndef  __TARGET_FPU_SOFTVFP

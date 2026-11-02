@@ -20,10 +20,13 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f4xx_it.h"
-#include "bsp.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "tim.h"
 #include "ucos_ii.h"
+#if (1000U % OS_TICKS_PER_SEC) != 0U
+#error OS tick rate must divide the HAL 1000 Hz tick
+#endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -186,13 +189,13 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
   /* USER CODE BEGIN SysTick_IRQn 0 */
-  static uint8_t os_tick_divider = 0;
+  static uint16_t os_tick_divider = 0;
 
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
   os_tick_divider++;
-  if (os_tick_divider >= 10U)
+  if (os_tick_divider >= (1000U / OS_TICKS_PER_SEC))
   {
     os_tick_divider = 0U;
     if (OSRunning == OS_TRUE)
@@ -217,17 +220,14 @@ void SysTick_Handler(void)
 void TIM2_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM2_IRQn 0 */
-
+  OS_CPU_SR cpu_sr = 0;
+  OS_ENTER_CRITICAL();
+  OSIntEnter();
+  OS_EXIT_CRITICAL();
   /* USER CODE END TIM2_IRQn 0 */
-	
-  OSIntEnter();                     // ← ★ 添加：通知 uC/OS-II 进入 ISR
-
   HAL_TIM_IRQHandler(&htim2);
-
-  OSIntExit();                      // ← ★ 添加：通知 uC/OS-II 退出 ISR
-
   /* USER CODE BEGIN TIM2_IRQn 1 */
-
+  OSIntExit();
   /* USER CODE END TIM2_IRQn 1 */
 }
 
@@ -237,18 +237,29 @@ void TIM2_IRQHandler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-
+  OS_CPU_SR cpu_sr = 0;
+  OS_ENTER_CRITICAL();
+  OSIntEnter();
+  OS_EXIT_CRITICAL();
   /* USER CODE END USART1_IRQn 0 */
-	
-  OSIntEnter();                     // ← ★ 添加：通知 uC/OS-II 进入 ISR
-
   HAL_UART_IRQHandler(&huart1);
-
-  OSIntExit();                      // ← ★ 添加：通知 uC/OS-II 退出 ISR
-	
   /* USER CODE BEGIN USART1_IRQn 1 */
-
+  OSIntExit();
   /* USER CODE END USART1_IRQn 1 */
+}
+
+void TIM4_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM4_IRQn 0 */
+  OS_CPU_SR cpu_sr=0;
+  OS_ENTER_CRITICAL();
+  OSIntEnter();
+  OS_EXIT_CRITICAL();
+  /* USER CODE END TIM4_IRQn 0 */
+  HAL_TIM_IRQHandler(&htim4);
+  /* USER CODE BEGIN TIM4_IRQn 1 */
+  OSIntExit();
+  /* USER CODE END TIM4_IRQn 1 */
 }
 
 /* USER CODE BEGIN 1 */
