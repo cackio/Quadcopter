@@ -21,7 +21,10 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
+#include "ano.h"
 
+/* 接收缓冲（单字节，供 HAL_UART_Receive_IT 使用） */
+uint8_t ano_rx_byte = 0;
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart1;
@@ -39,7 +42,7 @@ void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 9600;
+  huart1.Init.BaudRate = 115200;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
@@ -51,7 +54,8 @@ void MX_USART1_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
-
+    /* 开启 USART1 单字节接收中断（匿名协议接收） */
+    HAL_UART_Receive_IT(&huart1, &ano_rx_byte, 1);
   /* USER CODE END USART1_Init 2 */
 
 }
@@ -115,5 +119,18 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+
+/**
+ * @brief  UART 接收完成回调（HAL 机制，每收到一个字节自动调用）
+ *
+ * 把字节交给匿名协议解析，然后继续开启下一次接收。
+ */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        Ano_Rx_Parse(ano_rx_byte);
+        HAL_UART_Receive_IT(&huart1, &ano_rx_byte, 1);   /* 继续接收下一字节 */
+    }
+}
 
 /* USER CODE END 1 */

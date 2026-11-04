@@ -1,0 +1,2834 @@
+================================================================================
+                        四轴飞行器核心代码汇总
+================================================================================
+目标平台：STM32F401RETx + uC/OS-II (Cortex-M4)
+完成状态：已完成系统移植（HAL 初始化 + RTOS 移植），姿态解算与控制逻辑尚未完成
+说明：本文件按逻辑分类整理了项目的全部核心源码，已剔除未改动的 uC/OS-II 内核
+      源文件、ST 官方 HAL/CMSIS 库文件、Keil 工程文件、SEGGER 组件、.gitignore 等
+      与核心逻辑无关的杂项文件。
+
+【目录】
+  第 1 部分   系统入口与任务调度  —— main.c / main.h
+  第 2 部分   板级支持包 BSP      —— bsp.c / bsp.h   （传感器驱动、电机控制、PPM 输入）
+  第 3 部分   外设初始化配置      —— gpio / i2c / tim / usart（CubeMX 生成，硬件映射）
+  第 4 部分   中断服务程序        —— stm32f4xx_it.c/h、stm32f4xx_hal_msp.c（RTOS 的 ISR 集成）
+  第 5 部分   uC/OS-II 移植层     —— os_cpu.h / os_cpu_c.c（Cortex-M4 移植）
+  第 6 部分   uC/OS-II 配置文件    —— os_cfg.h / app_cfg.h
+
+================================================================================
+================================== 第 1 部分 ==================================
+                   系统入口与任务调度 (main.c / main.h)
+================================================================================
+【文件：Core/Src/main.c】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "bsp.h"
+#include "i2c.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <string.h>
+#include <stdarg.h>
+#include "ucos_ii.h"
+#include <stdio.h>
+#include "os_trace.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+#define SENSOR_TASK_STK_SIZE   256
+#define MOTOR_TASK_STK_SIZE    256
+#define UART_TASK_STK_SIZE     384
+#define START_TASK_STK_SIZE    256
+
+#define START_TASK_PRIO         5
+#define SENSOR_TASK_PRIO       8
+#define MOTOR_TASK_PRIO        7
+#define UART_TASK_PRIO         9
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+OS_STK StartTaskStk[START_TASK_STK_SIZE];
+OS_STK SensorTaskStk[SENSOR_TASK_STK_SIZE];
+OS_STK MotorTaskStk[MOTOR_TASK_STK_SIZE];
+OS_STK UartTaskStk[UART_TASK_STK_SIZE];
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN PFP */
+void SystemClock_Config(void);
+void StartTask(void *p_arg);
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+
+void MotorTask(void *p_arg)
+{
+		OS_CPU_SR cpu_sr = 0;
+    uint16_t throttle_input;
+
+    (void)p_arg;
+
+    while (1)
+    {
+        /*
+         * T8FB 一般通道 3 是油门，对应数组下标 2
+         * 为了防止中断正在改 PPM_Values，这里关中断短暂读取。
+         */
+        OS_ENTER_CRITICAL();
+        throttle_input = PPM_Values[2];
+        OS_EXIT_CRITICAL();
+
+        /*
+         * 信号异常保护
+         */
+        if (throttle_input < 900 || throttle_input > 2200)
+        {
+            throttle_input = 1000;
+        }
+
+        /*
+         * 四路电机同步油门
+         */
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_1, throttle_input);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_2, throttle_input);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_3, throttle_input);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_4, throttle_input);
+
+        /*
+         * 电机控制一般 20ms 更新一次
+         */
+        OSTimeDlyHMSM(0, 0, 0, 20);
+    }
+}
+void SensorTask(void *p_arg)
+{
+    (void)p_arg;
+
+    while (1)
+    {
+        MPU6050_Read_Raw();
+        HMC5883L_Read_Raw();
+        MS5611_Read_Raw();
+
+        /*
+         * 传感器读取周期可以先设 50ms。
+         * 后面做姿态解算时，MPU6050 可以单独提高到 5ms 或 10ms。
+         */
+        OSTimeDlyHMSM(0, 0, 0, 50);
+    }
+}
+void UartTask(void *p_arg)
+{
+		OS_CPU_SR cpu_sr = 0;
+    char data[160];
+
+    int16_t ax, ay, az;
+    int16_t gx, gy, gz;
+    int16_t mx, my, mz;
+    uint32_t p_raw, t_raw;
+    uint16_t throttle;
+
+    (void)p_arg;
+
+    HAL_UART_Transmit(&huart1,
+                      (uint8_t *)"UartTask running\r\n",
+                      18,
+                      300);
+
+    while (1)
+    {
+        /*
+         * 拷贝一份全局变量，防止打印过程中数据被传感器任务改动。
+         */
+        OS_ENTER_CRITICAL();
+
+        ax = Accel_X_RAW;
+        ay = Accel_Y_RAW;
+        az = Accel_Z_RAW;
+
+        gx = Gyro_X_RAW;
+        gy = Gyro_Y_RAW;
+        gz = Gyro_Z_RAW;
+
+        mx = Mag_X_RAW;
+        my = Mag_Y_RAW;
+        mz = Mag_Z_RAW;
+
+        p_raw = D1_Pressure_RAW;
+        t_raw = D2_Temperature_RAW;
+
+        throttle = PPM_Values[2];
+
+        OS_EXIT_CRITICAL();
+
+        snprintf(data, sizeof(data),
+                 "THR:%u\r\n"
+                 "Accel:%d,%d,%d\r\n"
+                 "Gyro:%d,%d,%d\r\n"
+                 "Mag:%d,%d,%d\r\n"
+                 "Pre_RAW:%lu Tem_RAW:%lu\r\n\r\n",
+                 throttle,
+                 ax, ay, az,
+                 gx, gy, gz,
+                 mx, my, mz,
+                 (unsigned long)p_raw,
+                 (unsigned long)t_raw);
+
+        HAL_UART_Transmit(&huart1,
+                          (uint8_t *)data,
+                          strlen(data),
+                          300);
+
+        OSTimeDlyHMSM(0, 0, 0, 500);
+    }
+}
+/* USER CODE END 0 */
+
+
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+	/* USER CODE BEGIN 1 */
+	INT8U os_err;
+
+    /* ---- HAL 库初始化 ---- */
+    HAL_Init();
+    SystemClock_Config();
+
+    /* ---- 外设初始化 ---- */
+    MX_GPIO_Init();
+    MX_I2C1_Init();
+    MX_USART1_UART_Init();
+    MX_TIM3_Init();
+    MX_TIM2_Init();
+
+    HAL_UART_Transmit(&huart1, (uint8_t *)"BOOT OK\r\n", 9, 1000);
+
+    /* ---- uC/OS-II 内核初始化 ---- */
+    OSInit();
+
+    /* ---- 创建启动任务（最高优先级，负责后续初始化）---- */
+    os_err = OSTaskCreate(StartTask,
+                          (void *)0,
+                          &StartTaskStk[START_TASK_STK_SIZE - 1],
+                          START_TASK_PRIO);
+    if (os_err != OS_ERR_NONE) {
+        Error_Handler();
+    }
+
+    /* ---- 启动多任务调度 ---- */
+    OSStart();
+
+  /* USER CODE END 1 */
+
+
+  /* USER CODE BEGIN 2 */
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+    /* USER CODE END 3 */
+  }
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLN = 336;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* USER CODE BEGIN 4 */
+/* ====================== StartTask（初始化任务） ====================== */
+
+void StartTask(void *p_arg)
+{
+    INT8U os_err;
+
+    (void)p_arg;
+
+    /* 1. 板级初始化（DWT + 传感器 + PWM + PPM，全在 BSP_Init 里）*/
+    BSP_Init();
+
+    /* 2. 启动 SystemView 事件录制 */
+    OS_TRACE_INIT();
+
+    /* 3. 创建子任务 */
+    os_err = OSTaskCreate(MotorTask,
+                          (void *)0,
+                          &MotorTaskStk[MOTOR_TASK_STK_SIZE - 1],
+                          MOTOR_TASK_PRIO);
+    OSTaskNameSet(MOTOR_TASK_PRIO, (INT8U *)"Motor Task", &os_err);
+
+    os_err = OSTaskCreate(SensorTask,
+                          (void *)0,
+                          &SensorTaskStk[SENSOR_TASK_STK_SIZE - 1],
+                          SENSOR_TASK_PRIO);
+    OSTaskNameSet(SENSOR_TASK_PRIO, (INT8U *)"Sensor Task", &os_err);
+
+    os_err = OSTaskCreate(UartTask,
+                          (void *)0,
+                          &UartTaskStk[UART_TASK_STK_SIZE - 1],
+                          UART_TASK_PRIO);
+    OSTaskNameSet(UART_TASK_PRIO, (INT8U *)"Uart Task", &os_err);
+
+    /* 4. 初始化任务完成，自我删除 */
+    (void)OSTaskDel(OS_PRIO_SELF);
+}
+
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+		
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
+
+--------------------------------------------------------------------------------
+【文件：Core/Inc/main.h】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.h
+  * @brief          : Header for main.c file.
+  *                   This file contains the common defines of the application.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __MAIN_H
+#define __MAIN_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
+#include "stm32f4xx_hal.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Exported types ------------------------------------------------------------*/
+/* USER CODE BEGIN ET */
+
+/* USER CODE END ET */
+
+/* Exported constants --------------------------------------------------------*/
+/* USER CODE BEGIN EC */
+
+/* USER CODE END EC */
+
+/* Exported macro ------------------------------------------------------------*/
+/* USER CODE BEGIN EM */
+
+/* USER CODE END EM */
+
+/* Exported functions prototypes ---------------------------------------------*/
+void Error_Handler(void);
+
+/* USER CODE BEGIN EFP */
+
+/* USER CODE END EFP */
+
+/* Private defines -----------------------------------------------------------*/
+#define LED0_Pin GPIO_PIN_5
+#define LED0_GPIO_Port GPIOA
+
+/* USER CODE BEGIN Private defines */
+
+/* USER CODE END Private defines */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __MAIN_H */
+
+================================================================================
+================================== 第 2 部分 ==================================
+                   板级支持包 BSP (bsp.c / bsp.h)
+          传感器驱动（MPU6050/HMC5883L/MS5611）、电机控制、PPM 输入捕获
+================================================================================
+【文件：Core/Src/bsp.c】
+--------------------------------------------------------------------------------
+
+/**
+  * @file    bsp.c
+  * @brief   板级支持包：传感器、电机、PPM、DWT 等硬件驱动
+  *
+  *          本文件从 main.c 中拆分出来，包含：
+  *            - DWT 周期计数器初始化
+  *            - MPU6050 + HMC5883L + MS5611 传感器驱动
+  *            - 电机 PWM 控制
+  *            - PPM 输入捕获回调
+  */
+
+#include "bsp.h"
+#include "i2c.h"
+#include "tim.h"
+#include "usart.h"
+
+/* ================================================================
+ *                         传感器地址与寄存器定义
+ * ================================================================ */
+
+/* MPU6050 */
+#define MPU6050_ADDR          0xD0   /* (0x68 << 1)               */
+#define PWR_MGMT_1_REG        0x6B
+#define WHO_AM_I_REG          0x75
+#define INT_PIN_CFG_REG       0x37   /* 旁路模式配置寄存器         */
+#define ACCEL_XOUT_H_REG      0x3B
+#define GYRO_XOUT_H_REG       0x43
+
+/* HMC5883L */
+#define HMC5883L_ADDR         0x3C   /* (0x1E << 1)               */
+#define HMC_CONF_A_REG        0x00
+#define HMC_MODE_REG          0x02
+#define HMC_DATA_X_H_REG      0x03
+
+/* MS5611 */
+#define MS5611_ADDR           0xEE   /* 7位地址 0x77              */
+#define MS_CMD_RESET          0x1E
+#define MS_CMD_READ_ADC       0x00
+#define MS_CMD_PROM_READ_BASE 0xA0
+#define MS_CMD_D1_4096        0x48   /* 压力转换 (OSR=4096)       */
+#define MS_CMD_D2_4096        0x58   /* 温度转换 (OSR=4096)       */
+
+
+/* ================================================================
+ *                            全局变量定义
+ * ================================================================ */
+
+/* MPU6050 原始数据 */
+int16_t Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW;
+int16_t Gyro_X_RAW,  Gyro_Y_RAW,  Gyro_Z_RAW;
+
+/* HMC5883L 原始磁场数据 */
+/* HMC5883L 的数据寄存器读取顺序是 X, Z, Y */
+int16_t Mag_X_RAW, Mag_Y_RAW, Mag_Z_RAW;
+
+/* MS5611 原始数据 (24位需要用 uint32_t 存储)*/
+uint32_t D1_Pressure_RAW;
+uint32_t D2_Temperature_RAW;
+
+/* MS5611 校准参数 (PROM) */
+uint16_t C[7];    /* C[1]~C[6] 有效 */
+
+/* PPM 遥控信号 8 通道 */
+volatile uint16_t PPM_Values[8] = {
+    1500, 1500, 1000, 1500,
+    1500, 1500, 1500, 1500
+};
+
+volatile uint8_t  PPM_Index    = 0;
+volatile uint32_t last_capture = 0;
+
+
+/* ================================================================
+ *                        BSP 初始化（含 DWT）
+ * ================================================================ */
+
+void BSP_Init(void)
+{
+    /* ---- 6. ★ DWT 周期计数器初始化（SystemView 时间戳源）---- */
+
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;   /* 使能 DWT 调试单元          */
+    DWT->CYCCNT = 0;                                   /* 计数器清零                  */
+    DWT->CTRL   |= DWT_CTRL_CYCCNTENA_Msk;            /* 启动 CYCCNT 自动计数        */
+
+    /* ---- 启动四路电机 PWM ---- */
+
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
+    /* ---- 启动 PPM 输入捕获中断 ---- */
+
+    HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+
+    /* ---- 初始化所有传感器 ---- */
+
+    All_Sensors_Init();
+
+    HAL_UART_Transmit(&huart1, (uint8_t *)"BSP Init OK\r\n", 15, 1000);
+}
+
+
+/* ================================================================
+ *                      MPU6050 驱动函数
+ * ================================================================ */
+
+void MPU6050_Init(void)
+{
+    uint8_t Data[2];
+    uint8_t check;
+
+    /* 检测 MPU6050 是否存在 */
+    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, WHO_AM_I_REG,
+                         1, &check, 1, 100) != HAL_OK || check != 0x68) {
+        return;   /* 芯片不存在或 I2C 通信失败 */
+    }
+
+    /* 唤醒传感器（退出睡眠模式） */
+    Data[0] = 0x00;
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, PWR_MGMT_1_REG,
+                      1, Data, 1, 100);
+    HAL_Delay(10);
+
+    /* 开启 I2C 旁路模式——使 MPU6050 后面的 HMC5883L 能被主机访问 */
+    Data[0] = 0x02;   /* BYPASS_EN = 1 */
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, INT_PIN_CFG_REG,
+                      1, Data, 1, 100);
+}
+
+
+/* ================================================================
+ *                     HMC5883L 驱动函数
+ * ================================================================ */
+
+void HMC5883L_Init(void)
+{
+    uint8_t Data[2];
+
+    /* 配置寄存器 A：8 次平均采样、75Hz 输出速率、正常测量 */
+    Data[0] = 0x70;
+    HAL_I2C_Mem_Write(&hi2c1, HMC5883L_ADDR, HMC_CONF_A_REG,
+                      1, Data, 1, 100);
+
+    /* 模式寄存器：连续测量模式 */
+    Data[0] = 0x00;
+    HAL_I2C_Mem_Write(&hi2c1, HMC5883L_ADDR, HMC_MODE_REG,
+                      1, Data, 1, 100);
+}
+
+
+/* ================================================================
+ *                      MS5611 驱动函数
+ * ================================================================ */
+
+void MS5611_PROM_Read(void)
+{
+    uint8_t Data_Rx[2];
+    uint8_t cmd;
+    uint8_t i;
+
+    /* 发送复位命令 */
+    cmd = MS_CMD_RESET; // 假设宏定义是 0x1E
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+    HAL_Delay(10); // 复位需要一点时间
+
+    /* 依次读取 6 个 PROM 校准值 C[1] ~ C[6] */
+    for (i = 0; i < 6; i++) {
+        uint8_t reg_addr = MS_CMD_PROM_READ_BASE + (i * 2);
+        HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &reg_addr, 1, 100);
+        if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Data_Rx, 2, 100) == HAL_OK) {
+            C[i + 1] = (uint16_t)(Data_Rx[0] << 8 | Data_Rx[1]);
+        }
+    }
+}
+
+void All_Sensors_Init(void)
+{
+    MPU6050_Init();
+    HMC5883L_Init();
+    MS5611_PROM_Read();
+}
+
+
+/* ================================================================
+ *                      传感器数据读取函数
+ * ================================================================ */
+
+void MPU6050_Read_Raw(void)
+{
+    uint8_t Rec_Data[14];   /* ACCEL_XOUT_H 到 GYRO_ZOUT_L 共 14 字节 */
+	
+	// 一次性从 0x3B 开始连续读取 14 个字节
+    if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, ACCEL_XOUT_H_REG,
+                         1, Rec_Data, 14, 100) == HAL_OK) {
+		// 加速度计 (X, Y, Z)
+        Accel_X_RAW = (int16_t)(Rec_Data[0]  << 8 | Rec_Data[1]);
+        Accel_Y_RAW = (int16_t)(Rec_Data[2]  << 8 | Rec_Data[3]);
+        Accel_Z_RAW = (int16_t)(Rec_Data[4]  << 8 | Rec_Data[5]);
+		
+		/* 忽略 Rec_Data[6..7]（温度） */
+		
+		// 陀螺仪 (X, Y, Z)
+        Gyro_X_RAW  = (int16_t)(Rec_Data[8]  << 8 | Rec_Data[9]);
+        Gyro_Y_RAW  = (int16_t)(Rec_Data[10] << 8 | Rec_Data[11]);
+        Gyro_Z_RAW  = (int16_t)(Rec_Data[12] << 8 | Rec_Data[13]);
+    }
+}
+
+void HMC5883L_Read_Raw(void)
+{
+    uint8_t Rec_Data[6];
+	
+	// 从 HMC_DATA_X_H_REG (0x03) 开始连续读取 6 个字节
+	// 顺序是 X高, X低, Z高, Z低, Y高, Y低
+    if (HAL_I2C_Mem_Read(&hi2c1, HMC5883L_ADDR, HMC_DATA_X_H_REG,
+                         1, Rec_Data, 6, 100) == HAL_OK) {
+        Mag_X_RAW = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
+        Mag_Z_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);  /* Z 在 Y 之前！ */
+        Mag_Y_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+    }
+}
+
+void MS5611_Read_Raw(void)
+{
+    uint8_t Rx_Buf[3];
+    uint8_t cmd;
+
+    /* ---- 读取原始压力 (D1) ---- */
+    cmd = MS_CMD_D1_4096;
+    if (HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100) != HAL_OK)
+        return;
+    HAL_Delay(10);   /* 等待 ADC 转换完成 */
+
+    cmd = MS_CMD_READ_ADC;
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+    if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Rx_Buf, 3, 100) == HAL_OK) {
+        D1_Pressure_RAW = (uint32_t)(Rx_Buf[0] << 16 | Rx_Buf[1] << 8 | Rx_Buf[2]);
+    }
+
+    /* ---- 读取原始温度 (D2) ---- */
+    cmd = MS_CMD_D2_4096;
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+    HAL_Delay(10);
+
+    cmd = MS_CMD_READ_ADC;
+    HAL_I2C_Master_Transmit(&hi2c1, MS5611_ADDR, &cmd, 1, 100);
+    if (HAL_I2C_Master_Receive(&hi2c1, MS5611_ADDR, Rx_Buf, 3, 100) == HAL_OK) {
+        D2_Temperature_RAW = (uint32_t)(Rx_Buf[0] << 16 | Rx_Buf[1] << 8 | Rx_Buf[2]);
+    }
+}
+
+
+/* ================================================================
+ *                       电机控制函数
+ * ================================================================ */
+/**
+  * @brief  设置电机速度
+  * @param  htim: 定时器句柄
+  * @param  Channel: 定时器通道
+  * @param  speed: 速度值，范围0-ARR值 (ARR是自动重载值)
+  * @retval None
+  */
+
+void Motor_SetSpeed(TIM_HandleTypeDef *htim, uint32_t Channel, uint16_t speed)
+{
+    uint16_t arr = __HAL_TIM_GET_AUTORELOAD(htim);
+    if (speed > arr) {
+        speed = arr;    /* 确保speed不超过ARR值，防止占空比超过 100% */
+    }
+    __HAL_TIM_SET_COMPARE(htim, Channel, speed);
+}
+
+void Motor_SetDirection(uint8_t direction)
+{
+    /* TODO: 实现电机方向控制。
+     * 例如通过 GPIO 控制 L298N/H 桥的 IN1/IN2 或 DIR 引脚。
+     * direction = 0: 正转, 1: 反转（编码待定）*/
+    (void)direction;   /* 消除编译器警告 */
+}
+
+void Motor_Stop(TIM_HandleTypeDef *htim, uint32_t Channel)
+{
+    __HAL_TIM_SET_COMPARE(htim, Channel, 0);
+}
+
+
+
+/* ================================================================
+ *                     PPM 输入捕获回调（ISR 上下文）
+ * ================================================================ */
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM2) {
+        uint32_t current_capture = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+        uint32_t diff;
+
+        /* 计算脉宽（考虑定时器溢出回绕）*/
+        if (current_capture >= last_capture) {
+            diff = current_capture - last_capture;
+        } else {
+            diff = (0xFFFFFFFF - last_capture) + current_capture + 1;
+        }
+
+        if (diff > 2500) {
+            /* 同步帧检测：帧间隔 > 2.5ms */
+            PPM_Index = 0;
+        } else if (diff >= 900 && diff <= 2100) {
+            /* 有效通道数据采集（900μs ~ 2100μs）*/
+            if (PPM_Index < 8) {
+                PPM_Values[PPM_Index] = diff;
+                PPM_Index++;
+            }
+        }
+        last_capture = current_capture;
+    }
+}
+
+--------------------------------------------------------------------------------
+【文件：Core/Inc/bsp.h】
+--------------------------------------------------------------------------------
+
+#ifndef BSP_H
+#define BSP_H
+
+#include "main.h"        // HAL 库类型定义
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ======================== 全局变量（extern 声明） ======================== */
+
+// MPU6050 原始数据
+extern int16_t Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW;
+extern int16_t Gyro_X_RAW,  Gyro_Y_RAW,  Gyro_Z_RAW;
+
+// HMC5883L 原始磁场数据
+extern int16_t Mag_X_RAW, Mag_Y_RAW, Mag_Z_RAW;
+
+// MS5611 原始数据（24位用 uint32_t 存储）
+extern uint32_t D1_Pressure_RAW;
+extern uint32_t D2_Temperature_RAW;
+
+// MS5611 校准参数 (PROM)
+extern uint16_t C[7];     // C[1]~C[6] 有效
+
+// PPM 遥控信号 8 通道值
+// 通道0:横滚 通道1:俯仰 通道2:油门 通道3:偏航
+// 通道4-7: 辅助通道（拨杆、旋钮等）
+extern volatile uint16_t PPM_Values[8];
+
+
+/* ======================== BSP 初始化 ======================== */
+
+/**
+ * @brief 板级初始化（包括 DWT + 传感器 + PWM + PPM）
+ *        必须在本函数中调用 OS_TRACE_INIT() 之前执行
+ */
+void BSP_Init(void);
+
+
+/* ======================== 传感器驱动 ======================== */
+
+void MPU6050_Init(void);
+void HMC5883L_Init(void);
+void MS5611_PROM_Read(void);
+void All_Sensors_Init(void);
+
+void MPU6050_Read_Raw(void);
+void HMC5883L_Read_Raw(void);
+void MS5611_Read_Raw(void);
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
+
+
+/* ======================== 电机控制 ======================== */
+
+/**
+ * @brief  设置电机速度（PWM 占空比）
+ * @param  htim:    定时器句柄
+ * @param  Channel: 定时器通道
+ * @param  speed:   速度值（0 ~ ARR，ARR 是自动重载值）
+ */
+void Motor_SetSpeed(TIM_HandleTypeDef *htim, uint32_t Channel, uint16_t speed);
+
+/**
+ * @brief  设置电机转动方向（预留接口，尚未实现）
+ * @param  direction: 方向（0=正转, 1=反转，具体编码待定）
+ */
+void Motor_SetDirection(uint8_t direction);
+
+/**
+ * @brief  停止电机（设置 PWM 占空比为 0）
+ */
+void Motor_Stop(TIM_HandleTypeDef *htim, uint32_t Channel);
+
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BSP_H */
+
+================================================================================
+================================= 第 3 部分 ==================================
+                     外设初始化配置（CubeMX 生成）
+           gpio / i2c / tim / usart —— 硬件引脚与时钟映射
+================================================================================
+【文件：Core/Src/gpio.c】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    gpio.c
+  * @brief   This file provides code for the configuration
+  *          of all used GPIO pins.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "gpio.h"
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/*----------------------------------------------------------------------------*/
+/* Configure GPIO                                                             */
+/*----------------------------------------------------------------------------*/
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */
+
+/** Configure pins as
+        * Analog
+        * Input
+        * Output
+        * EVENT_OUT
+        * EXTI
+*/
+void MX_GPIO_Init(void)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : LED0_Pin */
+  GPIO_InitStruct.Pin = LED0_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LED0_GPIO_Port, &GPIO_InitStruct);
+
+}
+
+/* USER CODE BEGIN 2 */
+
+/* USER CODE END 2 */
+
+--------------------------------------------------------------------------------
+【文件：Core/Inc/gpio.h】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    gpio.h
+  * @brief   This file contains all the function prototypes for
+  *          the gpio.c file
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __GPIO_H__
+#define __GPIO_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* USER CODE BEGIN Private defines */
+
+/* USER CODE END Private defines */
+
+void MX_GPIO_Init(void);
+
+/* USER CODE BEGIN Prototypes */
+
+/* USER CODE END Prototypes */
+
+#ifdef __cplusplus
+}
+#endif
+#endif /*__ GPIO_H__ */
+
+--------------------------------------------------------------------------------
+【文件：Core/Src/i2c.c】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    i2c.c
+  * @brief   This file provides code for the configuration
+  *          of the I2C instances.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "i2c.h"
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+I2C_HandleTypeDef hi2c1;
+
+/* I2C1 init function */
+void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(i2cHandle->Instance==I2C1)
+  {
+  /* USER CODE BEGIN I2C1_MspInit 0 */
+
+  /* USER CODE END I2C1_MspInit 0 */
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**I2C1 GPIO Configuration
+    PB6     ------> I2C1_SCL
+    PB7     ------> I2C1_SDA
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* I2C1 clock enable */
+    __HAL_RCC_I2C1_CLK_ENABLE();
+  /* USER CODE BEGIN I2C1_MspInit 1 */
+
+  /* USER CODE END I2C1_MspInit 1 */
+  }
+}
+
+void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
+{
+
+  if(i2cHandle->Instance==I2C1)
+  {
+  /* USER CODE BEGIN I2C1_MspDeInit 0 */
+
+  /* USER CODE END I2C1_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_I2C1_CLK_DISABLE();
+
+    /**I2C1 GPIO Configuration
+    PB6     ------> I2C1_SCL
+    PB7     ------> I2C1_SDA
+    */
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6);
+
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_7);
+
+  /* USER CODE BEGIN I2C1_MspDeInit 1 */
+
+  /* USER CODE END I2C1_MspDeInit 1 */
+  }
+}
+
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */
+
+--------------------------------------------------------------------------------
+【文件：Core/Inc/i2c.h】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    i2c.h
+  * @brief   This file contains all the function prototypes for
+  *          the i2c.c file
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __I2C_H__
+#define __I2C_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+extern I2C_HandleTypeDef hi2c1;
+
+/* USER CODE BEGIN Private defines */
+
+/* USER CODE END Private defines */
+
+void MX_I2C1_Init(void);
+
+/* USER CODE BEGIN Prototypes */
+
+/* USER CODE END Prototypes */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __I2C_H__ */
+
+--------------------------------------------------------------------------------
+【文件：Core/Src/tim.c】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    tim.c
+  * @brief   This file provides code for the configuration
+  *          of the TIM instances.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "tim.h"
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+
+/* TIM2 init function */
+void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 83;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 4294967295;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_IC_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
+}
+/* TIM3 init function */
+void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 83;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 19999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+void HAL_TIM_IC_MspInit(TIM_HandleTypeDef* tim_icHandle)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(tim_icHandle->Instance==TIM2)
+  {
+  /* USER CODE BEGIN TIM2_MspInit 0 */
+
+  /* USER CODE END TIM2_MspInit 0 */
+    /* TIM2 clock enable */
+    __HAL_RCC_TIM2_CLK_ENABLE();
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    /**TIM2 GPIO Configuration
+    PA0-WKUP     ------> TIM2_CH1
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_0;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* TIM2 interrupt Init */
+    HAL_NVIC_SetPriority(TIM2_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(TIM2_IRQn);
+  /* USER CODE BEGIN TIM2_MspInit 1 */
+
+  /* USER CODE END TIM2_MspInit 1 */
+  }
+}
+
+void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef* tim_pwmHandle)
+{
+
+  if(tim_pwmHandle->Instance==TIM3)
+  {
+  /* USER CODE BEGIN TIM3_MspInit 0 */
+
+  /* USER CODE END TIM3_MspInit 0 */
+    /* TIM3 clock enable */
+    __HAL_RCC_TIM3_CLK_ENABLE();
+  /* USER CODE BEGIN TIM3_MspInit 1 */
+
+  /* USER CODE END TIM3_MspInit 1 */
+  }
+}
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef* timHandle)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(timHandle->Instance==TIM3)
+  {
+  /* USER CODE BEGIN TIM3_MspPostInit 0 */
+
+  /* USER CODE END TIM3_MspPostInit 0 */
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    /**TIM3 GPIO Configuration
+    PA6     ------> TIM3_CH1
+    PA7     ------> TIM3_CH2
+    PB0     ------> TIM3_CH3
+    PB1     ------> TIM3_CH4
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM3;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM3;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN TIM3_MspPostInit 1 */
+
+  /* USER CODE END TIM3_MspPostInit 1 */
+  }
+
+}
+
+void HAL_TIM_IC_MspDeInit(TIM_HandleTypeDef* tim_icHandle)
+{
+
+  if(tim_icHandle->Instance==TIM2)
+  {
+  /* USER CODE BEGIN TIM2_MspDeInit 0 */
+
+  /* USER CODE END TIM2_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_TIM2_CLK_DISABLE();
+
+    /**TIM2 GPIO Configuration
+    PA0-WKUP     ------> TIM2_CH1
+    */
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_0);
+
+    /* TIM2 interrupt Deinit */
+    HAL_NVIC_DisableIRQ(TIM2_IRQn);
+  /* USER CODE BEGIN TIM2_MspDeInit 1 */
+
+  /* USER CODE END TIM2_MspDeInit 1 */
+  }
+}
+
+void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef* tim_pwmHandle)
+{
+
+  if(tim_pwmHandle->Instance==TIM3)
+  {
+  /* USER CODE BEGIN TIM3_MspDeInit 0 */
+
+  /* USER CODE END TIM3_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_TIM3_CLK_DISABLE();
+  /* USER CODE BEGIN TIM3_MspDeInit 1 */
+
+  /* USER CODE END TIM3_MspDeInit 1 */
+  }
+}
+
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */
+
+--------------------------------------------------------------------------------
+【文件：Core/Inc/tim.h】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    tim.h
+  * @brief   This file contains all the function prototypes for
+  *          the tim.c file
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __TIM_H__
+#define __TIM_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+extern TIM_HandleTypeDef htim2;
+
+extern TIM_HandleTypeDef htim3;
+
+/* USER CODE BEGIN Private defines */
+
+/* USER CODE END Private defines */
+
+void MX_TIM2_Init(void);
+void MX_TIM3_Init(void);
+
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
+
+/* USER CODE BEGIN Prototypes */
+
+/* USER CODE END Prototypes */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __TIM_H__ */
+
+--------------------------------------------------------------------------------
+【文件：Core/Src/usart.c】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    usart.c
+  * @brief   This file provides code for the configuration
+  *          of the USART instances.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "usart.h"
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+UART_HandleTypeDef huart1;
+
+/* USART1 init function */
+
+void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 9600;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  if(uartHandle->Instance==USART1)
+  {
+  /* USER CODE BEGIN USART1_MspInit 0 */
+
+  /* USER CODE END USART1_MspInit 0 */
+    /* USART1 clock enable */
+    __HAL_RCC_USART1_CLK_ENABLE();
+
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    /**USART1 GPIO Configuration
+    PA9     ------> USART1_TX
+    PA10     ------> USART1_RX
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* USART1 interrupt Init */
+    HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
+  /* USER CODE BEGIN USART1_MspInit 1 */
+
+  /* USER CODE END USART1_MspInit 1 */
+  }
+}
+
+void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
+{
+
+  if(uartHandle->Instance==USART1)
+  {
+  /* USER CODE BEGIN USART1_MspDeInit 0 */
+
+  /* USER CODE END USART1_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_USART1_CLK_DISABLE();
+
+    /**USART1 GPIO Configuration
+    PA9     ------> USART1_TX
+    PA10     ------> USART1_RX
+    */
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_9|GPIO_PIN_10);
+
+    /* USART1 interrupt Deinit */
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
+  /* USER CODE BEGIN USART1_MspDeInit 1 */
+
+  /* USER CODE END USART1_MspDeInit 1 */
+  }
+}
+
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */
+
+--------------------------------------------------------------------------------
+【文件：Core/Inc/usart.h】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    usart.h
+  * @brief   This file contains all the function prototypes for
+  *          the usart.c file
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __USART_H__
+#define __USART_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+extern UART_HandleTypeDef huart1;
+
+/* USER CODE BEGIN Private defines */
+
+/* USER CODE END Private defines */
+
+void MX_USART1_UART_Init(void);
+
+/* USER CODE BEGIN Prototypes */
+
+/* USER CODE END Prototypes */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __USART_H__ */
+
+================================================================================
+============================= 第 4 部分 ====================================
+                      中断服务程序 (stm32f4xx_it.c/h)
+             含 uC/OS-II 的 ISR 集成（OSIntEnter/OSIntExit、SysTick 分频）
+                    及 HAL MSP 全局初始化 (stm32f4xx_hal_msp.c)
+================================================================================
+【文件：Core/Src/stm32f4xx_it.c】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    stm32f4xx_it.c
+  * @brief   Interrupt Service Routines.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "stm32f4xx_it.h"
+#include "bsp.h"
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "ucos_ii.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN TD */
+
+/* USER CODE END TD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/* External variables --------------------------------------------------------*/
+extern TIM_HandleTypeDef htim2;
+extern UART_HandleTypeDef huart1;
+/* USER CODE BEGIN EV */
+
+/* USER CODE END EV */
+
+/******************************************************************************/
+/*           Cortex-M4 Processor Interruption and Exception Handlers          */
+/******************************************************************************/
+/**
+  * @brief This function handles Non maskable interrupt.
+  */
+void NMI_Handler(void)
+{
+  /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
+
+  /* USER CODE END NonMaskableInt_IRQn 0 */
+  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
+   while (1)
+  {
+  }
+  /* USER CODE END NonMaskableInt_IRQn 1 */
+}
+
+/**
+  * @brief This function handles Hard fault interrupt.
+  */
+void HardFault_Handler(void)
+{
+  /* USER CODE BEGIN HardFault_IRQn 0 */
+
+  /* USER CODE END HardFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
+    /* USER CODE END W1_HardFault_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles Memory management fault.
+  */
+void MemManage_Handler(void)
+{
+  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
+
+  /* USER CODE END MemoryManagement_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
+    /* USER CODE END W1_MemoryManagement_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles Pre-fetch fault, memory access fault.
+  */
+void BusFault_Handler(void)
+{
+  /* USER CODE BEGIN BusFault_IRQn 0 */
+
+  /* USER CODE END BusFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
+    /* USER CODE END W1_BusFault_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles Undefined instruction or illegal state.
+  */
+void UsageFault_Handler(void)
+{
+  /* USER CODE BEGIN UsageFault_IRQn 0 */
+
+  /* USER CODE END UsageFault_IRQn 0 */
+  while (1)
+  {
+    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
+    /* USER CODE END W1_UsageFault_IRQn 0 */
+  }
+}
+
+/**
+  * @brief This function handles System service call via SWI instruction.
+  */
+void SVC_Handler(void)
+{
+  /* USER CODE BEGIN SVCall_IRQn 0 */
+
+  /* USER CODE END SVCall_IRQn 0 */
+  /* USER CODE BEGIN SVCall_IRQn 1 */
+
+  /* USER CODE END SVCall_IRQn 1 */
+}
+
+/**
+  * @brief This function handles Debug monitor.
+  */
+void DebugMon_Handler(void)
+{
+  /* USER CODE BEGIN DebugMonitor_IRQn 0 */
+
+  /* USER CODE END DebugMonitor_IRQn 0 */
+  /* USER CODE BEGIN DebugMonitor_IRQn 1 */
+
+  /* USER CODE END DebugMonitor_IRQn 1 */
+}
+
+/**
+  * @brief This function handles Pendable request for system service.
+  */
+void PendSV_Handler(void)
+{
+  /* USER CODE BEGIN PendSV_IRQn 0 */
+
+  /* USER CODE END PendSV_IRQn 0 */
+  /* USER CODE BEGIN PendSV_IRQn 1 */
+
+  /* USER CODE END PendSV_IRQn 1 */
+}
+
+/**
+  * @brief This function handles System tick timer.
+  */
+void SysTick_Handler(void)
+{
+  /* USER CODE BEGIN SysTick_IRQn 0 */
+  static uint8_t os_tick_divider = 0;
+
+  /* USER CODE END SysTick_IRQn 0 */
+  HAL_IncTick();
+  /* USER CODE BEGIN SysTick_IRQn 1 */
+  os_tick_divider++;
+  if (os_tick_divider >= 10U)
+  {
+    os_tick_divider = 0U;
+    if (OSRunning == OS_TRUE)
+    {
+      OS_CPU_SysTickHandler();
+    }
+  }
+
+  /* USER CODE END SysTick_IRQn 1 */
+}
+
+/******************************************************************************/
+/* STM32F4xx Peripheral Interrupt Handlers                                    */
+/* Add here the Interrupt Handlers for the used peripherals.                  */
+/* For the available peripheral interrupt handler names,                      */
+/* please refer to the startup file (startup_stm32f4xx.s).                    */
+/******************************************************************************/
+
+/**
+  * @brief This function handles TIM2 global interrupt.
+  */
+void TIM2_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM2_IRQn 0 */
+
+  /* USER CODE END TIM2_IRQn 0 */
+	
+  OSIntEnter();                     // ← ★ 添加：通知 uC/OS-II 进入 ISR
+
+  HAL_TIM_IRQHandler(&htim2);
+
+  OSIntExit();                      // ← ★ 添加：通知 uC/OS-II 退出 ISR
+
+  /* USER CODE BEGIN TIM2_IRQn 1 */
+
+  /* USER CODE END TIM2_IRQn 1 */
+}
+
+/**
+  * @brief This function handles USART1 global interrupt.
+  */
+void USART1_IRQHandler(void)
+{
+  /* USER CODE BEGIN USART1_IRQn 0 */
+
+  /* USER CODE END USART1_IRQn 0 */
+	
+  OSIntEnter();                     // ← ★ 添加：通知 uC/OS-II 进入 ISR
+
+  HAL_UART_IRQHandler(&huart1);
+
+  OSIntExit();                      // ← ★ 添加：通知 uC/OS-II 退出 ISR
+	
+  /* USER CODE BEGIN USART1_IRQn 1 */
+
+  /* USER CODE END USART1_IRQn 1 */
+}
+
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */
+
+--------------------------------------------------------------------------------
+【文件：Core/Inc/stm32f4xx_it.h】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file    stm32f4xx_it.h
+  * @brief   This file contains the headers of the interrupt handlers.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Define to prevent recursive inclusion -------------------------------------*/
+#ifndef __STM32F4xx_IT_H
+#define __STM32F4xx_IT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Exported types ------------------------------------------------------------*/
+/* USER CODE BEGIN ET */
+
+/* USER CODE END ET */
+
+/* Exported constants --------------------------------------------------------*/
+/* USER CODE BEGIN EC */
+
+/* USER CODE END EC */
+
+/* Exported macro ------------------------------------------------------------*/
+/* USER CODE BEGIN EM */
+
+/* USER CODE END EM */
+
+/* Exported functions prototypes ---------------------------------------------*/
+void NMI_Handler(void);
+void HardFault_Handler(void);
+void MemManage_Handler(void);
+void BusFault_Handler(void);
+void UsageFault_Handler(void);
+void SVC_Handler(void);
+void DebugMon_Handler(void);
+void PendSV_Handler(void);
+void SysTick_Handler(void);
+void TIM2_IRQHandler(void);
+void USART1_IRQHandler(void);
+/* USER CODE BEGIN EFP */
+
+/* USER CODE END EFP */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __STM32F4xx_IT_H */
+
+--------------------------------------------------------------------------------
+【文件：Core/Src/stm32f4xx_hal_msp.c】
+--------------------------------------------------------------------------------
+
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file         stm32f4xx_hal_msp.c
+  * @brief        This file provides code for the MSP Initialization
+  *               and de-Initialization codes.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN TD */
+
+/* USER CODE END TD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN Define */
+
+/* USER CODE END Define */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN Macro */
+
+/* USER CODE END Macro */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* External functions --------------------------------------------------------*/
+/* USER CODE BEGIN ExternalFunctions */
+
+/* USER CODE END ExternalFunctions */
+
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+/**
+  * Initializes the Global MSP.
+  */
+void HAL_MspInit(void)
+{
+
+  /* USER CODE BEGIN MspInit 0 */
+
+  /* USER CODE END MspInit 0 */
+
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+  __HAL_RCC_PWR_CLK_ENABLE();
+
+  /* System interrupt init*/
+
+  /* USER CODE BEGIN MspInit 1 */
+
+  /* USER CODE END MspInit 1 */
+}
+
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */
+
+================================================================================
+========================= 第 5 部分 =========================================
+                    uC/OS-II 移植层 (os_cpu.h / os_cpu_c.c)
+               Cortex-M4 移植：临界区、任务栈初始化、SysTick 处理
+================================================================================
+【文件：ucos/Port/os_cpu.h】
+--------------------------------------------------------------------------------
+
+#ifndef  OS_CPU_H
+#define  OS_CPU_H
+
+#ifdef   OS_CPU_GLOBALS
+#define  OS_CPU_EXT
+#else
+#define  OS_CPU_EXT  extern
+#endif
+
+#ifdef __cplusplus
+extern  "C" {                                    /* See Note #1.                                       */
+#endif
+
+#ifndef  OS_CPU_EXCEPT_STK_SIZE
+#define  OS_CPU_EXCEPT_STK_SIZE      256u        /* Default exception stack size is 256 OS_STK entries */
+#endif
+
+#ifndef  __TARGET_FPU_SOFTVFP
+#define  OS_CPU_ARM_FP_EN              1u
+#else
+#define  OS_CPU_ARM_FP_EN              0u
+#endif
+
+#ifndef CPU_CFG_KA_IPL_BOUNDARY
+#error  "CPU_CFG_KA_IPL_BOUNDARY        not #define'd in 'app_cfg.h'    "   /* See Note # 1 & 2        */
+#else
+#if (CPU_CFG_KA_IPL_BOUNDARY == 0u)
+#error  "CPU_CFG_KA_IPL_BOUNDARY        should be > 0 "
+#endif
+#endif
+
+#ifndef CPU_CFG_NVIC_PRIO_BITS
+#error  "CPU_CFG_NVIC_PRIO_BITS         not #define'd in 'app_cfg.h'    "   /* See Note # 3            */
+#else
+#if (CPU_CFG_KA_IPL_BOUNDARY >= (1u << CPU_CFG_NVIC_PRIO_BITS))
+#error  "CPU_CFG_KA_IPL_BOUNDARY        should not be set to higher than max programable priority level "
+#endif
+#endif
+
+
+typedef unsigned char  BOOLEAN;
+typedef unsigned char  INT8U;                    /* Unsigned  8 bit quantity                           */
+typedef signed   char  INT8S;                    /* Signed    8 bit quantity                           */
+typedef unsigned short INT16U;                   /* Unsigned 16 bit quantity                           */
+typedef signed   short INT16S;                   /* Signed   16 bit quantity                           */
+typedef unsigned int   INT32U;                   /* Unsigned 32 bit quantity                           */
+typedef signed   int   INT32S;                   /* Signed   32 bit quantity                           */
+typedef float          FP32;                     /* Single precision floating point                    */
+typedef double         FP64;                     /* Double precision floating point                    */
+
+typedef unsigned int   OS_STK;                   /* Each stack entry is 32-bit wide                    */
+typedef unsigned int   OS_CPU_SR;                /* Define size of CPU status register (PSR = 32 bits) */
+
+
+#define  OS_CRITICAL_METHOD   3u
+
+#if OS_CRITICAL_METHOD == 3u
+                                                 /* Save current BASEPRI priority lvl for exception... */
+                                                 /* .. and set BASEPRI to CPU_CFG_KA_IPL_BOUNDARY      */
+#define  OS_ENTER_CRITICAL()  do { cpu_sr = OS_CPU_SR_Save(CPU_CFG_KA_IPL_BOUNDARY << (8u - CPU_CFG_NVIC_PRIO_BITS));} while (0)
+                                                 /* Restore CPU BASEPRI priority level.                */
+#define  OS_EXIT_CRITICAL()   do { OS_CPU_SR_Restore(cpu_sr);} while (0)
+#endif
+
+
+/*
+*********************************************************************************************************
+*                                        Cortex-M Miscellaneous
+*********************************************************************************************************
+*/
+
+#define  OS_STK_GROWTH        1u                 /* Stack grows from HIGH to LOW memory on ARM         */
+
+#define  OS_TASK_SW()         OSCtxSw()
+
+
+/*
+*********************************************************************************************************
+*                                          GLOBAL VARIABLES
+*********************************************************************************************************
+*/
+
+OS_CPU_EXT  OS_STK   OS_CPU_ExceptStk[OS_CPU_EXCEPT_STK_SIZE];
+OS_CPU_EXT  OS_STK  *OS_CPU_ExceptStkBase;
+
+
+/*
+*********************************************************************************************************
+*                                         FUNCTION PROTOTYPES
+*********************************************************************************************************
+*/
+
+#if OS_CRITICAL_METHOD == 3u                     /* See OS_CPU_A.ASM                                   */
+OS_CPU_SR  OS_CPU_SR_Save         (OS_CPU_SR  new_basepri);
+void       OS_CPU_SR_Restore      (OS_CPU_SR  cpu_sr);
+#endif
+
+void       OSCtxSw                (void);
+void       OSIntCtxSw             (void);
+void       OSStartHighRdy         (void);
+
+                                                 /* See OS_CPU_C.C                                     */
+void       OS_CPU_SysTickInit     (INT32U     cnts);
+void       OS_CPU_SysTickInitFreq (INT32U     cpu_freq);
+
+void       OS_CPU_SysTickHandler  (void);
+void       OS_CPU_PendSVHandler   (void);
+
+#if (OS_CPU_ARM_FP_EN > 0u)
+void       OS_CPU_FP_Reg_Push     (OS_STK    *stkPtr);
+void       OS_CPU_FP_Reg_Pop      (OS_STK    *stkPtr);
+#endif
+
+/*
+*********************************************************************************************************
+*                                   EXTERNAL C LANGUAGE LINKAGE END
+*********************************************************************************************************
+*/
+
+#ifdef __cplusplus
+}                                                /* End of 'extern'al C lang linkage.                  */
+#endif
+
+
+
+
+#endif
+
+--------------------------------------------------------------------------------
+【文件：ucos/Port/os_cpu_c.c】
+--------------------------------------------------------------------------------
+
+#define  OS_CPU_GLOBALS
+#include  <ucos_ii.h>
+
+#if OS_TMR_EN > 0u
+static  INT16U  OSTmrCtr;
+#endif
+
+
+INT32U  OS_KA_BASEPRI_Boundary;                                 /* Base Priority boundary.                              */
+
+
+/*
+*********************************************************************************************************
+*                                          SYS TICK DEFINES
+*********************************************************************************************************
+*/
+
+#define  OS_CPU_CM_SYST_CSR         (*((volatile INT32U *)0xE000E010uL)) /* SysTick Ctrl & Status Reg.                  */
+#define  OS_CPU_CM_SYST_RVR         (*((volatile INT32U *)0xE000E014uL)) /* SysTick Reload  Value Reg.                  */
+#define  OS_CPU_CM_SYST_CVR         (*((volatile INT32U *)0xE000E018uL)) /* SysTick Current Value Reg.                  */
+#define  OS_CPU_CM_SYST_CALIB       (*((volatile INT32U *)0xE000E01CuL)) /* SysTick Cal     Value Reg.                  */
+#define  OS_CPU_CM_SCB_SHPRI1       (*((volatile INT32U *)0xE000ED18uL)) /* System Handlers  4 to  7 Prio.              */
+#define  OS_CPU_CM_SCB_SHPRI2       (*((volatile INT32U *)0xE000ED1CuL)) /* System Handlers  8 to 11 Prio.              */
+#define  OS_CPU_CM_SCB_SHPRI3       (*((volatile INT32U *)0xE000ED20uL)) /* System Handlers 12 to 15 Prio.              */
+
+
+#define  OS_CPU_CM_SYST_CSR_COUNTFLAG                     0x00010000uL   /* Count flag.                                 */
+#define  OS_CPU_CM_SYST_CSR_CLKSOURCE                     0x00000004uL   /* Clock Source.                               */
+#define  OS_CPU_CM_SYST_CSR_TICKINT                       0x00000002uL   /* Interrupt enable.                           */
+#define  OS_CPU_CM_SYST_CSR_ENABLE                        0x00000001uL   /* Counter mode.                               */
+
+#define  OS_CPU_CM_FP_FPCCR         (*((volatile INT32U *)0xE000EF34uL)) /* Floating-Point Context Control Reg.         */
+#define  OS_CPU_CM_FPCCR_LAZY_STK                         0xC0000000uL   /* See Note 1.                                 */
+
+#if OS_CPU_HOOKS_EN > 0u
+void  OSInitHookBegin (void)
+{
+    INT32U   size;
+    OS_STK  *pstk;
+#if (OS_CPU_ARM_FP_EN > 0u)
+    INT32U   reg_val;
+#endif
+                                                                /* Clear exception stack for stack checking.            */
+    pstk = &OS_CPU_ExceptStk[0];
+    size = OS_CPU_EXCEPT_STK_SIZE;
+    while (size > 0u) {
+        size--;
+       *pstk++ = (OS_STK)0;
+    }
+
+                                                                /* Align the ISR stack to 8-bytes                       */
+    OS_CPU_ExceptStkBase = (OS_STK *)&OS_CPU_ExceptStk[OS_CPU_EXCEPT_STK_SIZE];
+    OS_CPU_ExceptStkBase = (OS_STK *)((OS_STK)(OS_CPU_ExceptStkBase) & 0xFFFFFFF8);
+
+#if (OS_CPU_ARM_FP_EN > 0u)
+    reg_val = OS_CPU_CM_FP_FPCCR;                               /* Check the floating point mode.                       */
+    if ((reg_val & OS_CPU_CM_FPCCR_LAZY_STK) != OS_CPU_CM_FPCCR_LAZY_STK) {
+        while (1u) {                                            /* See Note (2).                                        */
+            ;
+        }
+    }
+#endif
+
+#if OS_TMR_EN > 0u
+    OSTmrCtr = 0u;
+#endif
+
+                                                                /* Set BASEPRI boundary from the configuration.         */
+    OS_KA_BASEPRI_Boundary = (INT32U)(CPU_CFG_KA_IPL_BOUNDARY << (8u - CPU_CFG_NVIC_PRIO_BITS));
+}
+#endif
+
+#if OS_CPU_HOOKS_EN > 0u
+void  OSInitHookEnd (void)
+{
+
+}
+#endif
+
+
+/*
+*********************************************************************************************************
+*                                          TASK CREATION HOOK
+*
+* Description: This function is called when a task is created.
+*
+* Arguments  : ptcb   is a pointer to the task control block of the task being created.
+*
+* Note(s)    : 1) Interrupts are disabled during this call.
+*********************************************************************************************************
+*/
+#if OS_CPU_HOOKS_EN > 0u
+void  OSTaskCreateHook (OS_TCB *ptcb)
+{
+#if OS_APP_HOOKS_EN > 0u
+    App_TaskCreateHook(ptcb);
+#else
+    (void)ptcb;                                                 /* Prevent compiler warning                             */
+#endif
+}
+#endif
+
+
+/*
+*********************************************************************************************************
+*                                           TASK DELETION HOOK
+*
+* Description: This function is called when a task is deleted.
+*
+* Arguments  : ptcb   is a pointer to the task control block of the task being deleted.
+*
+* Note(s)    : 1) Interrupts are disabled during this call.
+*********************************************************************************************************
+*/
+#if OS_CPU_HOOKS_EN > 0u
+void  OSTaskDelHook (OS_TCB *ptcb)
+{
+#if OS_APP_HOOKS_EN > 0u
+    App_TaskDelHook(ptcb);
+#else
+    (void)ptcb;                                                 /* Prevent compiler warning                             */
+#endif
+}
+#endif
+
+#if OS_CPU_HOOKS_EN > 0u
+void  OSTaskIdleHook (void)
+{
+#if OS_APP_HOOKS_EN > 0u
+    App_TaskIdleHook();
+#endif
+}
+#endif
+
+
+/*
+*********************************************************************************************************
+*                                            TASK RETURN HOOK
+*
+* Description: This function is called if a task accidentally returns.  In other words, a task should
+*              either be an infinite loop or delete itself when done.
+*
+* Arguments  : ptcb      is a pointer to the task control block of the task that is returning.
+*
+* Note(s)    : none
+*********************************************************************************************************
+*/
+
+#if OS_CPU_HOOKS_EN > 0u
+void  OSTaskReturnHook (OS_TCB  *ptcb)
+{
+#if OS_APP_HOOKS_EN > 0u
+    App_TaskReturnHook(ptcb);
+#else
+    (void)ptcb;
+#endif
+}
+#endif
+
+
+/*
+*********************************************************************************************************
+*                                           STATISTIC TASK HOOK
+*
+* Description: This function is called every second by uC/OS-II's statistics task.  This allows your
+*              application to add functionality to the statistics task.
+*
+* Arguments  : none
+*********************************************************************************************************
+*/
+
+#if OS_CPU_HOOKS_EN > 0u
+void  OSTaskStatHook (void)
+{
+#if OS_APP_HOOKS_EN > 0u
+    App_TaskStatHook();
+#endif
+}
+#endif
+
+OS_STK  *OSTaskStkInit (void    (*task)(void *p_arg),
+                        void     *p_arg,
+                        OS_STK   *ptos,
+                        INT16U    opt)
+{
+    OS_STK  *p_stk;
+
+
+    (void)opt;                                                  /* 'opt' is not used, prevent warning                   */
+    p_stk      = ptos + 1u;                                     /* Load stack pointer                                   */
+                                                                /* Align the stack to 8-bytes.                          */
+    p_stk      = (OS_STK *)((OS_STK)(p_stk) & 0xFFFFFFF8u);
+                                                                /* Registers stacked as if auto-saved on exception      */
+#if (OS_CPU_ARM_FP_EN > 0u)                                     /* FPU auto-saved registers.                            */
+     --p_stk;
+    *(--p_stk) = (OS_STK)0x02000000u;                           /* FPSCR                                                */
+                                                                /* Initialize S0-S15 floating point registers           */
+    *(--p_stk) = (OS_STK)0x41700000u;                           /* S15                                                  */
+    *(--p_stk) = (OS_STK)0x41600000u;                           /* S14                                                  */
+    *(--p_stk) = (OS_STK)0x41500000u;                           /* S13                                                  */
+    *(--p_stk) = (OS_STK)0x41400000u;                           /* S12                                                  */
+    *(--p_stk) = (OS_STK)0x41300000u;                           /* S11                                                  */
+    *(--p_stk) = (OS_STK)0x41200000u;                           /* S10                                                  */
+    *(--p_stk) = (OS_STK)0x41100000u;                           /* S9                                                   */
+    *(--p_stk) = (OS_STK)0x41000000u;                           /* S8                                                   */
+    *(--p_stk) = (OS_STK)0x40E00000u;                           /* S7                                                   */
+    *(--p_stk) = (OS_STK)0x40C00000u;                           /* S6                                                   */
+    *(--p_stk) = (OS_STK)0x40A00000u;                           /* S5                                                   */
+    *(--p_stk) = (OS_STK)0x40800000u;                           /* S4                                                   */
+    *(--p_stk) = (OS_STK)0x40400000u;                           /* S3                                                   */
+    *(--p_stk) = (OS_STK)0x40000000u;                           /* S2                                                   */
+    *(--p_stk) = (OS_STK)0x3F800000u;                           /* S1                                                   */
+    *(--p_stk) = (OS_STK)0x00000000u;                           /* S0                                                   */
+#endif
+    *(--p_stk) = (OS_STK)0x01000000uL;                          /* xPSR                                                 */
+    *(--p_stk) = (OS_STK)task;                                  /* Entry Point                                          */
+    *(--p_stk) = (OS_STK)OS_TaskReturn;                         /* R14 (LR)                                             */
+    *(--p_stk) = (OS_STK)0x12121212uL;                          /* R12                                                  */
+    *(--p_stk) = (OS_STK)0x03030303uL;                          /* R3                                                   */
+    *(--p_stk) = (OS_STK)0x02020202uL;                          /* R2                                                   */
+    *(--p_stk) = (OS_STK)0x01010101uL;                          /* R1                                                   */
+    *(--p_stk) = (OS_STK)p_arg;                                 /* R0 : argument                                        */
+
+#if (OS_CPU_ARM_FP_EN > 0u)
+    *(--p_stk) = (OS_STK)0xFFFFFFEDuL;                          /* R14: EXEC_RETURN; See Note 5                         */
+#else
+    *(--p_stk) = (OS_STK)0xFFFFFFFDuL;                          /* R14: EXEC_RETURN; See Note 5                         */
+#endif
+                                                                /* Remaining registers saved on process stack           */
+    *(--p_stk) = (OS_STK)0x11111111uL;                          /* R11                                                  */
+    *(--p_stk) = (OS_STK)0x10101010uL;                          /* R10                                                  */
+    *(--p_stk) = (OS_STK)0x09090909uL;                          /* R9                                                   */
+    *(--p_stk) = (OS_STK)0x08080808uL;                          /* R8                                                   */
+    *(--p_stk) = (OS_STK)0x07070707uL;                          /* R7                                                   */
+    *(--p_stk) = (OS_STK)0x06060606uL;                          /* R6                                                   */
+    *(--p_stk) = (OS_STK)0x05050505uL;                          /* R5                                                   */
+    *(--p_stk) = (OS_STK)0x04040404uL;                          /* R4                                                   */
+
+#if (OS_CPU_ARM_FP_EN > 0u)
+                                                                /* Initialize S16-S31 floating point registers          */
+    *(--p_stk) = (OS_STK)0x41F80000u;                           /* S31                                                  */
+    *(--p_stk) = (OS_STK)0x41F00000u;                           /* S30                                                  */
+    *(--p_stk) = (OS_STK)0x41E80000u;                           /* S29                                                  */
+    *(--p_stk) = (OS_STK)0x41E00000u;                           /* S28                                                  */
+    *(--p_stk) = (OS_STK)0x41D80000u;                           /* S27                                                  */
+    *(--p_stk) = (OS_STK)0x41D00000u;                           /* S26                                                  */
+    *(--p_stk) = (OS_STK)0x41C80000u;                           /* S25                                                  */
+    *(--p_stk) = (OS_STK)0x41C00000u;                           /* S24                                                  */
+    *(--p_stk) = (OS_STK)0x41B80000u;                           /* S23                                                  */
+    *(--p_stk) = (OS_STK)0x41B00000u;                           /* S22                                                  */
+    *(--p_stk) = (OS_STK)0x41A80000u;                           /* S21                                                  */
+    *(--p_stk) = (OS_STK)0x41A00000u;                           /* S20                                                  */
+    *(--p_stk) = (OS_STK)0x41980000u;                           /* S19                                                  */
+    *(--p_stk) = (OS_STK)0x41900000u;                           /* S18                                                  */
+    *(--p_stk) = (OS_STK)0x41880000u;                           /* S17                                                  */
+    *(--p_stk) = (OS_STK)0x41800000u;                           /* S16                                                  */
+#endif
+
+    return (p_stk);
+}
+
+
+/*
+*********************************************************************************************************
+*                                           TASK SWITCH HOOK
+*
+* Description: This function is called when a task switch is performed.  This allows you to perform other
+*              operations during a context switch.
+*
+* Arguments  : none
+*
+* Note(s)    : 1) Interrupts are disabled during this call.
+*              2) It is assumed that the global pointer 'OSTCBHighRdy' points to the TCB of the task that
+*                 will be 'switched in' (i.e. the highest priority task) and, 'OSTCBCur' points to the
+*                 task being switched out (i.e. the preempted task).
+*********************************************************************************************************
+*/
+#if (OS_CPU_HOOKS_EN > 0u) && (OS_TASK_SW_HOOK_EN > 0u)
+void  OSTaskSwHook (void)
+{
+
+#if (OS_CPU_ARM_FP_EN > 0u)
+    OS_CPU_FP_Reg_Push(OSTCBCur->OSTCBStkPtr);                  /* Push the FP registers of the current task.           */
+#endif
+
+#if OS_APP_HOOKS_EN > 0u
+    App_TaskSwHook();
+#endif
+
+    OS_TRACE_TASK_SWITCHED_IN(OSTCBHighRdy);
+
+#if (OS_CPU_ARM_FP_EN > 0u)
+    OS_CPU_FP_Reg_Pop(OSTCBHighRdy->OSTCBStkPtr);               /* Pop the FP registers of the highest ready task.      */
+#endif
+}
+#endif
+
+#if OS_CPU_HOOKS_EN > 0u
+void  OSTCBInitHook (OS_TCB *ptcb)
+{
+#if OS_APP_HOOKS_EN > 0u
+    App_TCBInitHook(ptcb);
+#else
+    (void)ptcb;                                                 /* Prevent compiler warning                             */
+#endif
+}
+#endif
+
+
+/*
+*********************************************************************************************************
+*                                               TICK HOOK
+*
+* Description: This function is called every tick.
+*
+* Arguments  : none
+*
+* Note(s)    : 1) Interrupts may or may not be ENABLED during this call.
+*********************************************************************************************************
+*/
+#if (OS_CPU_HOOKS_EN > 0u) && (OS_TIME_TICK_HOOK_EN > 0u)
+void  OSTimeTickHook (void)
+{
+#if OS_APP_HOOKS_EN > 0u
+    App_TimeTickHook();
+#endif
+
+#if OS_TMR_EN > 0u
+    OSTmrCtr++;
+    if (OSTmrCtr >= (OS_TICKS_PER_SEC / OS_TMR_CFG_TICKS_PER_SEC)) {
+        OSTmrCtr = 0u;
+        OSTmrSignal();
+    }
+#endif
+}
+#endif
+
+
+/*
+*********************************************************************************************************
+*                                          SYS TICK HANDLER
+*
+* Description: Handle the system tick (SysTick) interrupt, which is used to generate the uC/OS-II tick
+*              interrupt.
+*
+* Arguments  : None.
+*
+* Note(s)    : 1) This function MUST be placed on entry 15 of the Cortex-M vector table.
+*********************************************************************************************************
+*/
+
+void  OS_CPU_SysTickHandler (void)
+{
+#if OS_CRITICAL_METHOD == 3u                                    /* Allocate storage for CPU status register             */
+    OS_CPU_SR  cpu_sr;
+#endif
+
+
+    OS_ENTER_CRITICAL();
+    OSIntEnter();                                               /* Tell uC/OS-II that we are starting an ISR            */
+    OS_EXIT_CRITICAL();
+
+    OSTimeTick();                                               /* Call uC/OS-II's OSTimeTick()                         */
+
+    OSIntExit();                                                /* Tell uC/OS-II that we are leaving the ISR            */
+}
+
+
+/*
+*********************************************************************************************************
+*                                         INITIALIZE SYS TICK
+*
+* Description: Initialize the SysTick using the CPU clock frequency.
+*
+* Arguments  : cpu_freq     CPU clock frequency.
+*
+* Note(s)    : 1) This function MUST be called after OSStart() & after processor initialization.
+*
+*              2) Either OS_CPU_SysTickInitFreq or OS_CPU_SysTickInit() can be called.
+*********************************************************************************************************
+*/
+
+void  OS_CPU_SysTickInitFreq (INT32U  cpu_freq)
+{
+    INT32U  cnts;
+
+
+    cnts = (cpu_freq / (INT32U)OS_TICKS_PER_SEC);               /* Determine nbr SysTick cnts between two OS tick intr. */
+
+    OS_CPU_SysTickInit(cnts);
+}
+
+void  OS_CPU_SysTickInit (INT32U  cnts)
+{
+    INT32U  prio;
+    INT32U  basepri;
+
+
+                                                                /* Set BASEPRI boundary from the configuration.         */
+    basepri               = (INT32U)(CPU_CFG_KA_IPL_BOUNDARY << (8u - CPU_CFG_NVIC_PRIO_BITS));
+    OS_CPU_CM_SYST_RVR    = cnts - 1u;                          /* Set Reload register.                                 */
+
+                                                                /* Set SysTick handler prio.                            */
+    prio                  =  OS_CPU_CM_SCB_SHPRI3;
+    prio                 &=  0x00FFFFFFu;
+    prio                 |= (basepri << 24u);
+    OS_CPU_CM_SCB_SHPRI3  = prio;
+
+                                                                /* Enable timer.                                        */
+    OS_CPU_CM_SYST_CSR   |= OS_CPU_CM_SYST_CSR_CLKSOURCE |
+                            OS_CPU_CM_SYST_CSR_ENABLE;
+                                                                /* Enable timer interrupt.                              */
+    OS_CPU_CM_SYST_CSR   |= OS_CPU_CM_SYST_CSR_TICKINT;
+}
+
+================================================================================
+========================= 第 6 部分 =========================================
+                    uC/OS-II 配置文件 (os_cfg.h / app_cfg.h)
+              RTOS 内核功能裁剪、任务/资源上限、时基频率、优先级边界
+================================================================================
+【文件：ucos/Cfg/os_cfg.h】
+--------------------------------------------------------------------------------
+
+#ifndef OS_CFG_H
+#define OS_CFG_H
+
+
+                                       /* ---------------------- MISCELLANEOUS ----------------------- */
+#define OS_APP_HOOKS_EN           0u   /* Application-defined hooks are called from the uC/OS-II hooks */
+#define OS_ARG_CHK_EN             1u   /* Enable (1) or Disable (0) argument checking                  */
+#define OS_CPU_HOOKS_EN           1u   /* uC/OS-II hooks are found in the processor port files         */
+
+#define OS_DEBUG_EN               1u   /* Enable(1) debug variables                                    */
+
+#define OS_EVENT_MULTI_EN         1u   /* Include code for OSEventPendMulti()                          */
+#define OS_EVENT_NAME_EN          1u   /* Enable names for Sem, Mutex, Mbox and Q                      */
+
+#define OS_LOWEST_PRIO           63u   /* Defines the lowest priority that can be assigned ...         */
+                                       /* ... MUST NEVER be higher than 254!                           */
+
+#define OS_MAX_EVENTS            10u   /* Max. number of event control blocks in your application      */
+#define OS_MAX_FLAGS              5u   /* Max. number of Event Flag Groups    in your application      */
+#define OS_MAX_MEM_PART           5u   /* Max. number of memory partitions                             */
+#define OS_MAX_QS                 4u   /* Max. number of queue control blocks in your application      */
+#define OS_MAX_TASKS             20u   /* Max. number of tasks in your application, MUST be >= 2       */
+
+#define OS_SCHED_LOCK_EN          1u   /* Include code for OSSchedLock() and OSSchedUnlock()           */
+
+#define OS_TICK_STEP_EN           1u   /* Enable tick stepping feature for uC/OS-View                  */
+#define OS_TICKS_PER_SEC        100u   /* Set the number of ticks in one second                        */
+
+#define OS_TLS_TBL_SIZE           0u   /* Size of Thread-Local Storage Table                           */
+
+
+                                       /* --------------------- TASK STACK SIZE ---------------------- */
+#define OS_TASK_TMR_STK_SIZE    128u   /* Timer      task stack size (# of OS_STK wide entries)        */
+#define OS_TASK_STAT_STK_SIZE   128u   /* Statistics task stack size (# of OS_STK wide entries)        */
+#define OS_TASK_IDLE_STK_SIZE   128u   /* Idle       task stack size (# of OS_STK wide entries)        */
+
+
+                                       /* --------------------- TASK MANAGEMENT ---------------------- */
+#define OS_TASK_CHANGE_PRIO_EN    1u   /*     Include code for OSTaskChangePrio()                      */
+#define OS_TASK_CREATE_EN         1u   /*     Include code for OSTaskCreate()                          */
+#define OS_TASK_CREATE_EXT_EN     1u   /*     Include code for OSTaskCreateExt()                       */
+#define OS_TASK_DEL_EN            1u   /*     Include code for OSTaskDel()                             */
+#define OS_TASK_NAME_EN           1u   /*     Enable task names                                        */
+#define OS_TASK_PROFILE_EN        1u   /*     Include variables in OS_TCB for profiling                */
+#define OS_TASK_QUERY_EN          1u   /*     Include code for OSTaskQuery()                           */
+#define OS_TASK_REG_TBL_SIZE      1u   /*     Size of task variables array (#of INT32U entries)        */
+#define OS_TASK_STAT_EN           1u   /*     Enable (1) or Disable(0) the statistics task             */
+#define OS_TASK_STAT_STK_CHK_EN   1u   /*     Check task stacks from statistic task                    */
+#define OS_TASK_SUSPEND_EN        1u   /*     Include code for OSTaskSuspend() and OSTaskResume()      */
+#define OS_TASK_SW_HOOK_EN        1u   /*     Include code for OSTaskSwHook()                          */
+
+
+                                       /* ----------------------- EVENT FLAGS ------------------------ */
+#define OS_FLAG_EN                1u   /* Enable (1) or Disable (0) code generation for EVENT FLAGS    */
+#define OS_FLAG_ACCEPT_EN         1u   /*     Include code for OSFlagAccept()                          */
+#define OS_FLAG_DEL_EN            1u   /*     Include code for OSFlagDel()                             */
+#define OS_FLAG_NAME_EN           1u   /*     Enable names for event flag group                        */
+#define OS_FLAG_QUERY_EN          1u   /*     Include code for OSFlagQuery()                           */
+#define OS_FLAG_WAIT_CLR_EN       1u   /* Include code for Wait on Clear EVENT FLAGS                   */
+#define OS_FLAGS_NBITS           16u   /* Size in #bits of OS_FLAGS data type (8, 16 or 32)            */
+
+
+                                       /* -------------------- MESSAGE MAILBOXES --------------------- */
+#define OS_MBOX_EN                1u   /* Enable (1) or Disable (0) code generation for MAILBOXES      */
+#define OS_MBOX_ACCEPT_EN         1u   /*     Include code for OSMboxAccept()                          */
+#define OS_MBOX_DEL_EN            1u   /*     Include code for OSMboxDel()                             */
+#define OS_MBOX_PEND_ABORT_EN     1u   /*     Include code for OSMboxPendAbort()                       */
+#define OS_MBOX_POST_EN           1u   /*     Include code for OSMboxPost()                            */
+#define OS_MBOX_POST_OPT_EN       1u   /*     Include code for OSMboxPostOpt()                         */
+#define OS_MBOX_QUERY_EN          1u   /*     Include code for OSMboxQuery()                           */
+
+
+                                       /* --------------------- MEMORY MANAGEMENT -------------------- */
+#define OS_MEM_EN                 1u   /* Enable (1) or Disable (0) code generation for MEMORY MANAGER */
+#define OS_MEM_NAME_EN            1u   /*     Enable memory partition names                            */
+#define OS_MEM_QUERY_EN           1u   /*     Include code for OSMemQuery()                            */
+
+
+                                       /* ---------------- MUTUAL EXCLUSION SEMAPHORES --------------- */
+#define OS_MUTEX_EN               1u   /* Enable (1) or Disable (0) code generation for MUTEX          */
+#define OS_MUTEX_ACCEPT_EN        1u   /*     Include code for OSMutexAccept()                         */
+#define OS_MUTEX_DEL_EN           1u   /*     Include code for OSMutexDel()                            */
+#define OS_MUTEX_QUERY_EN         1u   /*     Include code for OSMutexQuery()                          */
+
+
+                                       /* ---------------------- MESSAGE QUEUES ---------------------- */
+#define OS_Q_EN                   1u   /* Enable (1) or Disable (0) code generation for QUEUES         */
+#define OS_Q_ACCEPT_EN            1u   /*     Include code for OSQAccept()                             */
+#define OS_Q_DEL_EN               1u   /*     Include code for OSQDel()                                */
+#define OS_Q_FLUSH_EN             1u   /*     Include code for OSQFlush()                              */
+#define OS_Q_PEND_ABORT_EN        1u   /*     Include code for OSQPendAbort()                          */
+#define OS_Q_POST_EN              1u   /*     Include code for OSQPost()                               */
+#define OS_Q_POST_FRONT_EN        1u   /*     Include code for OSQPostFront()                          */
+#define OS_Q_POST_OPT_EN          1u   /*     Include code for OSQPostOpt()                            */
+#define OS_Q_QUERY_EN             1u   /*     Include code for OSQQuery()                              */
+
+
+                                       /* ------------------------ SEMAPHORES ------------------------ */
+#define OS_SEM_EN                 1u   /* Enable (1) or Disable (0) code generation for SEMAPHORES     */
+#define OS_SEM_ACCEPT_EN          1u   /*    Include code for OSSemAccept()                            */
+#define OS_SEM_DEL_EN             1u   /*    Include code for OSSemDel()                               */
+#define OS_SEM_PEND_ABORT_EN      1u   /*    Include code for OSSemPendAbort()                         */
+#define OS_SEM_QUERY_EN           1u   /*    Include code for OSSemQuery()                             */
+#define OS_SEM_SET_EN             1u   /*    Include code for OSSemSet()                               */
+
+
+                                       /* --------------------- TIME MANAGEMENT ---------------------- */
+#define OS_TIME_DLY_HMSM_EN       1u   /*     Include code for OSTimeDlyHMSM()                         */
+#define OS_TIME_DLY_RESUME_EN     1u   /*     Include code for OSTimeDlyResume()                       */
+#define OS_TIME_GET_SET_EN        1u   /*     Include code for OSTimeGet() and OSTimeSet()             */
+#define OS_TIME_TICK_HOOK_EN      1u   /*     Include code for OSTimeTickHook()                        */
+
+
+                                       /* --------------------- TIMER MANAGEMENT --------------------- */
+#define OS_TMR_EN                 0u   /* Enable (1) or Disable (0) code generation for TIMERS         */
+#define OS_TMR_CFG_MAX           16u   /*     Maximum number of timers                                 */
+#define OS_TMR_CFG_NAME_EN        1u   /*     Determine timer names                                    */
+#define OS_TMR_CFG_WHEEL_SIZE     7u   /*     Size of timer wheel (#Spokes)                            */
+#define OS_TMR_CFG_TICKS_PER_SEC 10u   /*     Rate at which timer management task runs (Hz)            */
+
+
+                                       /* ---------------------- TRACE RECORDER ---------------------- */
+#define OS_TRACE_EN               1u   /* Enable (1) or Disable (0) uC/OS-II Trace instrumentation     */
+#define OS_TRACE_API_ENTER_EN     1u   /* Enable (1) or Disable (0) uC/OS-II Trace API enter instrum.  */
+#define OS_TRACE_API_EXIT_EN      1u   /* Enable (1) or Disable (0) uC/OS-II Trace API exit  instrum.  */
+
+#endif
+
+--------------------------------------------------------------------------------
+【文件：ucos/Cfg/app_cfg.h】
+--------------------------------------------------------------------------------
+
+#define  CPU_CFG_NVIC_PRIO_BITS      4u
+#define  CPU_CFG_KA_IPL_BOUNDARY     4u
+
+
+================================================================================
+                           —— 全部核心代码结束 ——
+================================================================================
+备注：
+  · 第 3 部分（外设初始化）与第 4 部分中的 HAL MSP/中断骨架为 CubeMX 生成，
+    属系统移植产物；用户逻辑集中在第 1、2 部分及 uC/OS-II 移植/配置层。
+  · 未包含：uC/OS-II 内核源文件（ucos/Core/*）、ST HAL/CMSIS 库（Drivers/*）、
+    Keil 工程（MDK-ARM/*）、SEGGER 组件、.gitignore 等与核心逻辑无关文件。
+  · 姿态解算与控制逻辑尚未实现，现有 SensorTask/MotorTask 仅完成原始数据
+    读取与油门直通，后续需在此框架内补充。
+

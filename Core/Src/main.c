@@ -31,6 +31,8 @@
 #include "ucos_ii.h"
 #include <stdio.h>
 #include "os_trace.h"
+#include "ano.h"
+#include "imu.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,10 +43,15 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define SENSOR_TASK_STK_SIZE   256
-#define MOTOR_TASK_STK_SIZE    256
-#define UART_TASK_STK_SIZE     384
-#define START_TASK_STK_SIZE    256
+/* 任务栈单位是“OS_STK 个数”，每个 OS_STK = 4 字节。
+ * SensorTask 在做椭球/磁校准的最小二乘拟合时局部矩阵很大
+ * （mat[9][10] / ATA[9][9] / JTJ[9][9] 各 300+ 字节），
+ * 原来 256 个（1024 字节）不够用，会栈溢出 → HardFault → 板子静默不发了。
+ * 这里统一放大，保证校准结束那一刻也不会溢出。 */
+#define SENSOR_TASK_STK_SIZE   512   /* 2 KB   */
+#define MOTOR_TASK_STK_SIZE    256   /* 1 KB   */
+#define UART_TASK_STK_SIZE     512   /* 2 KB，含 char data[220] 和 snprintf 的临时空间 */
+#define START_TASK_STK_SIZE    384   /* 1.5 KB，含 BSP_Init + 创建三个任务 */
 
 #define START_TASK_PRIO         5
 #define SENSOR_TASK_PRIO       8
@@ -102,6 +109,14 @@ void MotorTask(void *p_arg)
         }
 
         /*
+         * 姿态校准完成前禁止输出油门，防止校准过程中误转电机。
+         */
+        if (!IMU_Calib_Done())
+        {
+            throttle_input = 1000;
+        }
+
+        /*
          * 四路电机同步油门
          */
         Motor_SetSpeed(&htim3, TIM_CHANNEL_1, throttle_input);
@@ -117,31 +132,59 @@ void MotorTask(void *p_arg)
 }
 void SensorTask(void *p_arg)
 {
+    static uint8_t ms_div = 0;
+
     (void)p_arg;
 
     while (1)
     {
+        /*
+         * 姿态通道：MPU6050 + HMC5883L 每个周期都读，
+         * 校准期间走校准状态机，校准完成后走 Madgwick 姿态解算。
+         */
         MPU6050_Read_Raw();
         HMC5883L_Read_Raw();
-        MS5611_Read_Raw();
+
+        if (IMU_Calib_Done())
+        {
+            IMU_Attitude_Update();
+        }
+        else
+        {
+            IMU_Calib_Update();
+        }
 
         /*
-         * 传感器读取周期可以先设 50ms。
-         * 后面做姿态解算时，MPU6050 可以单独提高到 5ms 或 10ms。
+         * 气压计与姿态无关，且阻塞约 20ms，降频到 200ms 读取一次。
          */
-        OSTimeDlyHMSM(0, 0, 0, 50);
+        if (++ms_div >= 20)
+        {
+            ms_div = 0;
+            MS5611_Read_Raw();
+        }
+
+        /*
+         * 1 tick = 10ms（OS_TICKS_PER_SEC = 100），姿态更新 100Hz。
+         * imu_dt 由 DWT 实测，周期抖动不会影响积分精度。
+         */
+        OSTimeDly(1);
     }
 }
 void UartTask(void *p_arg)
 {
 		OS_CPU_SR cpu_sr = 0;
-    char data[160];
+    char data[220];
+    static uint8_t last_stage = 0xFF;
+    static uint8_t txt_div = 0;      /* 文本日志分频：20 × 50ms = 1s */
+    static uint8_t led_div = 0;      /* LED 心跳分频：10 × 50ms = 0.5s */
+    uint8_t stage;
 
     int16_t ax, ay, az;
     int16_t gx, gy, gz;
     int16_t mx, my, mz;
     uint32_t p_raw, t_raw;
     uint16_t throttle;
+    float roll_deg, pitch_deg, yaw_deg;
 
     (void)p_arg;
 
@@ -153,48 +196,122 @@ void UartTask(void *p_arg)
     while (1)
     {
         /*
-         * 拷贝一份全局变量，防止打印过程中数据被传感器任务改动。
+         * 0) 先处理上位机下发的 0xE0 / 0xE1 请求。
+         *    协议解析跑在 USART1 接收中断里，但“应答帧”必须在这里发：
+         *    中断里调用 HAL_UART_Transmit 会和本任务的发送抢同一个 huart1，
+         *    结果是应答被丢掉，上位机就一直“等待校验数据超时 / 参数读取失败”。
          */
-        OS_ENTER_CRITICAL();
+        Ano_Process_Requests();
 
-        ax = Accel_X_RAW;
-        ay = Accel_Y_RAW;
-        az = Accel_Z_RAW;
+        /*
+         * 1) 校准阶段提示：阶段变化时打印一次。
+         */
+        stage = IMU_Calib_Stage();
+        if (stage != last_stage)
+        {
+            const char *msg = NULL;
 
-        gx = Gyro_X_RAW;
-        gy = Gyro_Y_RAW;
-        gz = Gyro_Z_RAW;
+            last_stage = stage;
+            if (stage == 0)
+            {
+                msg = "CALIB: keep the board STILL for 2s...\r\n";
+            }
+            else if (stage == 1)
+            {
+                msg = "CALIB: rotate the board SLOWLY in all directions (10s)...\r\n";
+            }
+            else
+            {
+                msg = "CALIB DONE. Attitude running.\r\n";
+            }
+            HAL_UART_Transmit(&huart1, (uint8_t *)msg, strlen(msg), 300);
+        }
 
-        mx = Mag_X_RAW;
-        my = Mag_Y_RAW;
-        mz = Mag_Z_RAW;
+        /*
+         * 2) 姿态帧单独走高频通道：50ms 一帧 = 20Hz。
+         *    上位机的波形/仪表需要连续数据才动得起来，
+         *    原来 500ms 一帧（2Hz）看起来就像卡住了。
+         */
+        Ano_Send_Attitude();
 
-        p_raw = D1_Pressure_RAW;
-        t_raw = D2_Temperature_RAW;
+        /*
+         * 3) 1Hz：文本日志 + 其余数据帧（原始传感器 / 高度 / 电机 / 状态）
+         */
+        if (++txt_div >= 20)
+        {
+            txt_div = 0;
 
-        throttle = PPM_Values[2];
+            /*
+             * 拷贝一份全局变量，防止打印过程中数据被传感器任务改动。
+             */
+            OS_ENTER_CRITICAL();
 
-        OS_EXIT_CRITICAL();
+            ax = Accel_X_RAW;
+            ay = Accel_Y_RAW;
+            az = Accel_Z_RAW;
 
-        snprintf(data, sizeof(data),
-                 "THR:%u\r\n"
-                 "Accel:%d,%d,%d\r\n"
-                 "Gyro:%d,%d,%d\r\n"
-                 "Mag:%d,%d,%d\r\n"
-                 "Pre_RAW:%lu Tem_RAW:%lu\r\n\r\n",
-                 throttle,
-                 ax, ay, az,
-                 gx, gy, gz,
-                 mx, my, mz,
-                 (unsigned long)p_raw,
-                 (unsigned long)t_raw);
+            gx = Gyro_X_RAW;
+            gy = Gyro_Y_RAW;
+            gz = Gyro_Z_RAW;
 
-        HAL_UART_Transmit(&huart1,
-                          (uint8_t *)data,
-                          strlen(data),
-                          300);
+            mx = Mag_X_RAW;
+            my = Mag_Y_RAW;
+            mz = Mag_Z_RAW;
 
-        OSTimeDlyHMSM(0, 0, 0, 500);
+            p_raw = D1_Pressure_RAW;
+            t_raw = D2_Temperature_RAW;
+
+            throttle = PPM_Values[2];
+
+            roll_deg  = euler_angle.roll  * RAD_TO_DEG;
+            pitch_deg = euler_angle.pitch * RAD_TO_DEG;
+            yaw_deg   = euler_angle.yaw   * RAD_TO_DEG;
+
+            OS_EXIT_CRITICAL();
+
+            snprintf(data, sizeof(data),
+                     "THR:%u RX:%u\r\n"
+                     "Euler:%d,%d,%d\r\n"
+                     "Accel:%d,%d,%d\r\n"
+                     "Gyro:%d,%d,%d\r\n"
+                     "Mag:%d,%d,%d\r\n"
+                     "Pre_RAW:%lu Tem_RAW:%lu\r\n\r\n",
+                     throttle,
+                     (unsigned)ano_rx_frames,
+                     (int)roll_deg, (int)pitch_deg, (int)yaw_deg,
+                     ax, ay, az,
+                     gx, gy, gz,
+                     mx, my, mz,
+                     (unsigned long)p_raw,
+                     (unsigned long)t_raw);
+
+            HAL_UART_Transmit(&huart1,
+                              (uint8_t *)data,
+                              strlen(data),
+                              300);
+
+            /*
+             * 文本与协议帧共用 USART1（PA9/PA10），蓝牙模块作为无线透传。
+             * 文本只是给人看的，协议帧才是上位机解析的对象，两者可以混发。
+             */
+            Ano_Send_Sensor_Raw();
+            Ano_Send_Altitude();
+            Ano_Send_Motor_Out();
+            Ano_Send_Status();
+        }
+
+        /*
+         * 4) LED 心跳：每 10 个周期（约 0.5s）翻转一次 LED0(PA5)。
+         *    LED 在闪 → 调度器和 UartTask 都活着；
+         *    LED 不闪 → 板子根本没跑起来（时钟/启动/硬件问题）。
+         */
+        if (++led_div >= 10)
+        {
+            led_div = 0;
+            HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
+        }
+
+        OSTimeDly(5);    /* 5 tick = 50ms（OS_TICKS_PER_SEC = 100） */
     }
 }
 /* USER CODE END 0 */
@@ -222,7 +339,38 @@ int main(void)
     MX_TIM3_Init();
     MX_TIM2_Init();
 
-    HAL_UART_Transmit(&huart1, (uint8_t *)"BOOT OK\r\n", 9, 1000);
+    HAL_UART_Transmit(&huart1, (uint8_t *)"BOOT OK v2 (USART1 115200)\r\n",
+                      strlen("BOOT OK v2 (USART1 115200)\r\n"), 1000);
+
+    /* ----------------------------------------------------------------------
+     *  冒烟测试（OS 启动之前执行）
+     *
+     *  目的：把“硬件链路”和“飞控逻辑”彻底分开，一上电就能判断问题在哪。
+     *    - 上位机若马上出现一行 AA FF F1 0C
+     *      → 时钟、波特率、接线、帧格式、校验全部正确，问题只在后面的任务；
+     *    - 若连 CHR 模式下的 "SMOKE: ..." 文字都看不到
+     *      → 问题在串口链路本身：TX/RX 是否交叉、串口模块、
+     *        或者板子晶振频率与 PLLM 不匹配（波特率整体偏了）。
+     *
+     *  数据区 12 字节（小端），对应 6 个 int16：
+     *    roll=10.00°  pitch=-5.00°  yaw=30.00°   gx=10.0°/s  gy=0  gz=0
+     *  固定值不跳动，方便在上位机仪表上直接看出“这就是冒烟帧”。
+     * ---------------------------------------------------------------------- */
+    HAL_UART_Transmit(&huart1,
+                      (uint8_t *)"SMOKE: AA FF F1 0C -> roll10 pitch-5 yaw30\r\n",
+                      strlen("SMOKE: AA FF F1 0C -> roll10 pitch-5 yaw30\r\n"), 1000);
+    {
+        uint8_t demo[12];
+        const int16_t v[6] = { 1000, -500, 3000, 100, 0, 0 };
+        uint8_t k;
+
+        for (k = 0; k < 6u; k++)
+        {
+            demo[k * 2]     = (uint8_t)(v[k] & 0xFF);          /* 低字节在前（小端） */
+            demo[k * 2 + 1] = (uint8_t)((v[k] >> 8) & 0xFF);
+        }
+        Ano_Send_Frame(ANO_FUNC_ATTITUDE, demo, 12u);
+    }
 
     /* ---- uC/OS-II 内核初始化 ---- */
     OSInit();
@@ -313,6 +461,12 @@ void StartTask(void *p_arg)
 
     /* 1. 板级初始化（DWT + 传感器 + PWM + PPM，全在 BSP_Init 里）*/
     BSP_Init();
+
+    /*  匿名上位机协议初始化 */
+    Ano_Init();
+
+    /* 姿态模块校准状态初始化（陀螺零偏 -> 翻转采样 -> 四元数初始化） */
+    IMU_Calib_Init();
 
     /* 2. 启动 SystemView 事件录制 */
     OS_TRACE_INIT();

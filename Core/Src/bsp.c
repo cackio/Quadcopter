@@ -22,6 +22,10 @@
 #define MPU6050_ADDR          0xD0   /* (0x68 << 1)               */
 #define PWR_MGMT_1_REG        0x6B
 #define WHO_AM_I_REG          0x75
+#define SMPLRT_DIV_REG        0x19   /* 采样率分频                 */
+#define CONFIG_REG            0x1A   /* DLPF 配置                  */
+#define GYRO_CONFIG_REG       0x1B   /* 陀螺量程配置               */
+#define ACCEL_CONFIG_REG      0x1C   /* 加速度量程配置             */
 #define INT_PIN_CFG_REG       0x37   /* 旁路模式配置寄存器         */
 #define ACCEL_XOUT_H_REG      0x3B
 #define GYRO_XOUT_H_REG       0x43
@@ -29,6 +33,7 @@
 /* HMC5883L */
 #define HMC5883L_ADDR         0x3C   /* (0x1E << 1)               */
 #define HMC_CONF_A_REG        0x00
+#define HMC_CONF_B_REG        0x01
 #define HMC_MODE_REG          0x02
 #define HMC_DATA_X_H_REG      0x03
 
@@ -122,6 +127,26 @@ void MPU6050_Init(void)
                       1, Data, 1, 100);
     HAL_Delay(10);
 
+    /* 采样率分频：1kHz / (1+0) = 1kHz（由读取周期决定实际使用率） */
+    Data[0] = 0x00;
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, SMPLRT_DIV_REG,
+                      1, Data, 1, 100);
+
+    /* DLPF：数字低通 44Hz（带宽 42Hz，延时 4.9ms） */
+    Data[0] = 0x03;
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, CONFIG_REG,
+                      1, Data, 1, 100);
+
+    /* 陀螺量程 ±2000°/s，分辨率 16.4 LSB/(°/s) —— 与 imu.h 常量一致 */
+    Data[0] = 0x18;
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, GYRO_CONFIG_REG,
+                      1, Data, 1, 100);
+
+    /* 加速度量程 ±4g，分辨率 8192 LSB/g —— 与 imu.h 常量一致 */
+    Data[0] = 0x08;
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, ACCEL_CONFIG_REG,
+                      1, Data, 1, 100);
+
     /* 开启 I2C 旁路模式——使 MPU6050 后面的 HMC5883L 能被主机访问 */
     Data[0] = 0x02;   /* BYPASS_EN = 1 */
     HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, INT_PIN_CFG_REG,
@@ -140,6 +165,11 @@ void HMC5883L_Init(void)
     /* 配置寄存器 A：8 次平均采样、75Hz 输出速率、正常测量 */
     Data[0] = 0x70;
     HAL_I2C_Mem_Write(&hi2c1, HMC5883L_ADDR, HMC_CONF_A_REG,
+                      1, Data, 1, 100);
+
+    /* 配置寄存器 B：增益 ±1.3Ga（默认值，显式写入） */
+    Data[0] = 0x20;
+    HAL_I2C_Mem_Write(&hi2c1, HMC5883L_ADDR, HMC_CONF_B_REG,
                       1, Data, 1, 100);
 
     /* 模式寄存器：连续测量模式 */

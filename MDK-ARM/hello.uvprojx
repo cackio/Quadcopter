@@ -583,6 +583,21 @@
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32f4xx_hal_msp.c</FilePath>
             </File>
+            <File>
+              <FileName>altitude.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\altitude.c</FilePath>
+            </File>
+            <File>
+              <FileName>imu.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\imu.c</FilePath>
+            </File>
+            <File>
+              <FileName>pid.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\pid.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -597,6 +612,16 @@
               <FileName>bsp.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Core\Inc\bsp.h</FilePath>
+            </File>
+            <File>
+              <FileName>ano.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\ano.c</FilePath>
+            </File>
+            <File>
+              <FileName>ano.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Core\Inc\ano.h</FilePath>
             </File>
           </Files>
         </Group>
