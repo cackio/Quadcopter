@@ -219,6 +219,7 @@ float IMU_WrapAngle(float angle)
 
 void IMU_Calib_Init(void)
 {
+    // 这里初始化一些校准参数
     calib_state        = CALIB_PENDING;
     calib_step         = CALIB_STEP_GYRO;
     calib_sample_cnt   = 0;

@@ -33,6 +33,7 @@
 #include "os_trace.h"
 #include "ano.h"
 #include "imu.h"
+#include "pid.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -119,15 +120,32 @@ void MotorTask(void *p_arg)
         /*
          * 四路电机同步油门
          */
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_1, throttle_input);
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_2, throttle_input);
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_3, throttle_input);
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_4, throttle_input);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_1, (uint16_t)PWM_IDLE);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_2, (uint16_t)PWM_IDLE);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_3, (uint16_t)PWM_IDLE);
+        Motor_SetSpeed(&htim3, TIM_CHANNEL_4, (uint16_t)PWM_IDLE);
 
-        /*
-         * 电机控制一般 20ms 更新一次
-         */
         OSTimeDlyHMSM(0, 0, 0, 20);
+        continue;
+      
+
+      /*
+        * 串级 PID 主流程（外环角度环 + 内环角速度环都在这一个任务里）：
+        *   1. PID_Exp_Calc      PPM → 期望角度(°)/期望角速度(°·s⁻¹)/油门
+        *   2. PID_FlyMode_Update 油门 > 1350 才 armed=1
+        *   3. PID_Motor_Calc    Roll/Pitch 串级 + Yaw 单环，共用同一个 Δt
+        *   4. PID_Motor_Output  混控结果写进 TIM3 四路 CCR
+        *
+        * 控制周期 20ms（50Hz），和 PID_Get_Time() 实测的 Δt 一致。
+        * 内环理论上可以跑到 5~10ms 响应更快，但为了满足“两个串在一个任务里”，
+        * 同时不让电机任务挤占 SensorTask 的 CPU，这里统一 50Hz。
+        */
+      PID_Control_Update();
+
+      /*
+        * 电机控制一般 20ms 更新一次
+        */
+      OSTimeDlyHMSM(0, 0, 0, 20);
     }
 }
 void SensorTask(void *p_arg)
@@ -467,6 +485,10 @@ void StartTask(void *p_arg)
 
     /* 姿态模块校准状态初始化（陀螺零偏 -> 翻转采样 -> 四元数初始化） */
     IMU_Calib_Init();
+
+    /* PID 初始化：默认参数 + 历史状态清零 + TIM4 1MHz 计时（测 Δt） */
+    PID_Init();
+    PID_Time_Init();
 
     /* 2. 启动 SystemView 事件录制 */
     OS_TRACE_INIT();

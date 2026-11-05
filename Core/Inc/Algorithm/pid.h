@@ -35,16 +35,30 @@ extern "C" {
  *  常量与类型定义
  * ========================================================================== */
 
-/* PID 参数限幅 */
+/* ---- 单位约定（整份 PID 模块统一用这一套，避免"度/弧度"混算） ----
+ *   角度       : 度 (°)          —— 由 euler_angle(rad) × RAD_TO_DEG 得到
+ *   角速度     : 度/秒 (°/s)      —— 由 gyro_body(rad/s) × RAD_TO_DEG 得到
+ *   PID 输出   : PWM 增量         —— 直接叠加到 1000~2000 的油门刻度上
+ *   采样周期   : 秒 (s)           —— 由 TIM4 实测（标称 20ms）
+ *
+ * 为什么用度而不是弧度：默认增益（外环 4.4 / 内环 2.6）是按度整定的，
+ * 若把弧度直接喂进 PID，数值会小 57 倍，输出几乎推不动电机。
+ */
+
+/* PID 输出限幅：单轴最多给油门叠加 ±500 */
 #define PID_OUT_MAX      500.0f    /* PID 输出最大值 */
 #define PID_OUT_MIN     -500.0f    /* PID 输出最小值 */
-#define PWM_OUT_MAX      2000.0f   /* PWM 输出最大值 */
-#define PWM_OUT_MIN      1000.0f   /* PWM 输出最小值 */
+#define PWM_OUT_MAX      2000.0f   /* 电机 PWM 最大值 */
+#define PWM_OUT_MIN      1000.0f   /* 电机 PWM 最小值 */
 #define PWM_IDLE         1000.0f   /* 怠速 PWM */
 
-/* 内环积分限幅 */
-#define CORE_INT_MAX     4000.0f   /* 内环积分幅值 */
-#define CORE_INT_SEP     300.0f    /* 内环积分分离幅值 */
+/* 内环积分处理 */
+#define CORE_INT_MAX     150.0f    /* 积分项最大"贡献"（PWM 单位，不是 eSum 本身） */
+#define CORE_INT_SEP      20.0f    /* 积分分离阈值：|e_rate| > 20°/s 时不积分 */
+
+/* 采样周期保护：TIM4 实测值离谱时退回标称值，防止 Ki/Kd 被算成荒谬的系数 */
+#define PID_DT_NOMINAL    0.02f    /* 标称周期 20ms（与 MotorTask 周期一致） */
+#define PID_DT_MAX        0.10f    /* 超过 100ms 视为无效读数 */
 
 /* 安全保护阈值 */
 #define ANGLE_LIMIT_DEG  65.0f     /* 倾斜角保护阈值 */
@@ -110,13 +124,14 @@ typedef struct
     float motor4;   /* 右后 */
 } MotorOutput_t;
 
-/* 期望值结构体 */
+/* 期望值结构体
+ * 注意：这里统一用"度"而不是弧度，和 PID 内部单位保持一致。 */
 typedef struct
 {
-    float roll;       /* 期望横滚角 (rad) */
-    float pitch;      /* 期望俯仰角 (rad) */
-    float yaw;        /* 期望偏航角速度 (rad/s) */
-    float thr;        /* 期望油门 (PWM) */
+    float roll;       /* 期望横滚角 (°) */
+    float pitch;      /* 期望俯仰角 (°) */
+    float yaw;        /* 期望偏航角速度 (°/s) */
+    float thr;        /* 期望油门 (PWM，1000~2000) */
 } Expectation_t;
 
 /* ============================================================================
@@ -160,7 +175,8 @@ void PID_Init(void);
  *
  * 步骤：
  *   1. 使能 TIM4 时钟
- *   2. 配置 TIM4：PSC=80-1, ARR=0xFFFF（1MHz 计数）
+ *   2. 配置 TIM4：PSC = 84-1（APB1 定时器时钟 84MHz → 1MHz 计数）, ARR=0xFFFF
+ *      → 1 个计数 = 1us，最长计 65.5ms
  *   3. 启动 TIM4
  */
 void PID_Time_Init(void);
@@ -191,8 +207,8 @@ float PID_Get_Time(void);
  * 步骤：
  *   1. 读取 PPM_Values（关中断保护）
  *   2. 限幅到有效范围
- *   3. 转换为期望值
- *   4. 转换单位（角度 → 弧度）
+ *   3. 转换为期望值（度 / 度每秒，全程不转弧度）
+ *   4. 按 EXP_*_MAX 再限一次幅
  */
 void PID_Exp_Calc(void);
 
@@ -202,8 +218,8 @@ void PID_Exp_Calc(void);
 
 /**
  * @brief 串级 PID 计算（Roll/Pitch）
- * @param shell_err 外环误差（角度误差，rad）
- * @param core_status 内环反馈（角速度，rad/s）
+ * @param shell_err 外环误差（角度误差，°）
+ * @param core_status 内环反馈（角速度，°/s）
  * @param shell 外环 PID
  * @param core 内环 PID
  * @return 内环输出
@@ -223,15 +239,14 @@ void PID_Exp_Calc(void);
 float PID_Cascade_Calc(float shell_err, float core_status, PID_t *shell, PID_t *core);
 
 /**
- * @brief 单环 PID 计算（Yaw/Thr）
- * @param err 误差
- * @param status 反馈值
+ * @brief 单环 PD 计算（偏航）
+ * @param err 角速度误差 e = ω_des - ω (°/s)
  * @param pid PID 结构体
- * @return PID 输出
+ * @return PID 输出（PWM 增量）
  *
- * 公式：output = Kp*(e + (e-eK_1)*Kd)  (PD)
+ * 公式：output = Kp*(e + (e-eK_1)*Kd)  （偏航只要 PD，不需要外环）
  */
-float PID_Single_Calc(float err, float status, PID_t *pid);
+float PID_Single_Calc(float err, PID_t *pid);
 
 /**
  * @brief 电机混控计算
@@ -264,6 +279,14 @@ void PID_Motor_Calc(void);
  *   4. motor4 → TIM3_CH4 (PB1)
  */
 void PID_Motor_Output(void);
+
+/**
+ * @brief 串级 PID 唯一对外入口（MotorTask 每 20ms 调用一次）
+ *
+ * 内部顺序：期望值映射 → 飞行模式/解锁 → 外环+内环 PID + 混控 → PWM 输出。
+ * 外环（角度环）和内环（角速度环）都在这一次调用里、用同一个 Δt 算完。
+ */
+void PID_Control_Update(void);
 
 /**
  * @brief 安全保护检查

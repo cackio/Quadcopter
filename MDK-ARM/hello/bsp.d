@@ -1,4 +1,5 @@
-hello/bsp.o: ..\Core\Src\bsp.c ..\Core\Inc\bsp.h ..\Core\Inc\main.h \
+hello/bsp.o: ..\Core\Src\Driver\bsp.c ..\Core\Inc\Driver\bsp.h \
+  ..\Core\Inc\App\main.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal.h \
   ..\Core\Inc\stm32f4xx_hal_conf.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_rcc.h \
@@ -25,4 +26,5 @@ hello/bsp.o: ..\Core\Src\bsp.c ..\Core\Inc\bsp.h ..\Core\Inc\main.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h \
-  ..\Core\Inc\i2c.h ..\Core\Inc\tim.h ..\Core\Inc\usart.h
+  ..\Core\Inc\Driver\i2c.h ..\Core\Inc\Driver\tim.h \
+  ..\Core\Inc\Driver\usart.h

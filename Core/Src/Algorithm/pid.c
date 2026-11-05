@@ -30,6 +30,7 @@
 #include "bsp.h"
 #include "tim.h"
 #include "ucos_ii.h"
+#include <math.h>      /* fabsf：积分分离/安全保护里判断误差大小 */
 
 /* ============================================================================
  *  全局变量定义
@@ -47,6 +48,28 @@ FlyMode_t      fly_mode    = FLY_MODE_STOP;
 MotorOutput_t  motor_out   = {PWM_IDLE, PWM_IDLE, PWM_IDLE, PWM_IDLE};
 float          pid_dt       = 0.02f;
 uint8_t        armed        = 0;
+
+/* ----------------------------------------------------------------------------
+ *  PID 历史状态清零（不动整定参数 Kp/Ti/Td）
+ *
+ * 什么时候用：电机停转（未解锁 / 油门低于 THR_MIN / 倾角超限）时清零。
+ * 为什么：积分项是"历史上误差的累积"，停在地面推杆时如果不清零，
+ *         eSum 会越积越大，一起飞立刻满舵（积分饱和/windup）。
+ * -------------------------------------------------------------------------- */
+static void PID_Reset_State(PID_t *p)
+{
+    p->eK     = 0.0f;
+    p->eK_1   = 0.0f;
+    p->eSum   = 0.0f;
+    p->output = 0.0f;
+}
+
+static void PID_Reset_All(void)
+{
+    PID_Reset_State(&roll_shell);  PID_Reset_State(&roll_core);
+    PID_Reset_State(&pitch_shell); PID_Reset_State(&pitch_core);
+    PID_Reset_State(&yaw_core);
+}
 
 /* ============================================================================
  *  初始化函数
@@ -184,15 +207,17 @@ void PID_Exp_Calc(void)
     ppm_thr   = PID_Limit(ppm_thr, 1000, 2000);
     ppm_yaw   = PID_Limit(ppm_yaw, 1000, 2000);
 
-    /* 步骤 3：转换为期望值（角度） */
-    float exp_roll_deg  = (float)(ppm_roll - 1500) * 0.03f;  /* 最大 20° */
-    float exp_pitch_deg = (float)(ppm_pitch - 1500) * 0.04f; /* 最大 20° */
-    float exp_yaw_deg   = (float)(ppm_yaw - 1500) * 0.02f;   /* 最大 10°/s */
+    /* 步骤 3：转换为期望值（单位：度 / 度每秒） */
+    float exp_roll_deg  = (float)(ppm_roll - 1500) * 0.03f;  /* ±500 → ±15° */
+    float exp_pitch_deg = (float)(ppm_pitch - 1500) * 0.04f; /* ±500 → ±20° */
+    float exp_yaw_deg   = (float)(ppm_yaw - 1500) * 0.02f;   /* ±500 → ±10°/s */
 
-    /* 步骤 4：转换单位（角度 → 弧度） */
-    expectation.roll  = exp_roll_deg * DEG_TO_RAD;
-    expectation.pitch = exp_pitch_deg * DEG_TO_RAD;
-    expectation.yaw   = exp_yaw_deg * DEG_TO_RAD;
+    /* 步骤 4：再限一次幅（摇杆端点可能略超 1000~2000）
+     *        这里保持"度"，不再转弧度——PID 模块全程用度，
+     *        弧度的换算只在 PID_Motor_Calc 读传感器时做一次。 */
+    expectation.roll  = PID_Limit(exp_roll_deg,  -EXP_ROLL_MAX,   EXP_ROLL_MAX);
+    expectation.pitch = PID_Limit(exp_pitch_deg, -EXP_PITCH_MAX,  EXP_PITCH_MAX);
+    expectation.yaw   = PID_Limit(exp_yaw_deg,   -EXP_YAW_RATE_MAX, EXP_YAW_RATE_MAX);
     expectation.thr   = (float)ppm_thr;
 }
 
@@ -204,110 +229,160 @@ float PID_Cascade_Calc(float shell_err, float core_status, PID_t *shell, PID_t *
 {
     /* 串级 PID 计算（Roll/Pitch）
      *
-     * 公式（参考笔记 PID.md 第五节）：
-     *   外环（角度环）：output = Kp * e
-     *   内环（角速度环）：output = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
+     * 结构（笔记 PID.md 第五节）：
+     *
+     *   θ_des ──►(−)──►[外环 P]──ω_des──►(−)──►[内环 PID]──► M (PWM 增量)
+     *             ▲                        ▲
+     *             │ θ (°)                 │ ω (°/s)
+     *          欧拉角(SensorTask)        陀螺仪(SensorTask)
+     *
+     * 为什么拆两级：单环"角度 → 力矩"是二阶对象，Kp 大了就振、小了就软；
+     * 拆成"角度 → 期望转速（P）"和"转速 → 力矩（PID）"两个一阶环后，
+     * 外环决定"回中快慢"，内环决定"跟随转速的阻尼和抗风能力"，各自独立整定。
+     *
+     * 公式：
+     *   外环：ω_des = Kp_shell · e_angle
+     *   内环：M     = Kp_core · ( e_rate + Ki·Σe_rate + Kd·Δe_rate )
+     *   其中  Ki = Δt / Ti     （位置式积分，Δt 由 TIM4 实测）
+     *         Kd = Td / Δt     （差分做微分）
+     *   单位：e_angle 为度，e_rate 为度/秒，M 为 PWM 增量。
      *
      * 步骤：
-     *   1. 计算外环误差 e = shell_err
-     *   2. 外环输出 = Kp * e
-     *   3. 计算内环误差 e = 外环输出 - core_status
-     *   4. 内环积分分离限幅
-     *   5. 内环输出 = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
-     *   6. 内环输出限幅
+     *   1. 外环误差 e_angle = θ_des - θ
+     *   2. 外环 P → 期望角速度 ω_des
+     *   3. 内环误差 e_rate = ω_des - ω
+     *   4. 积分分离 + 积分限幅（抗饱和）
+     *   5. 内环 PID 输出
+     *   6. 输出限幅
      */
 
-    float shell_Kd, core_Ki, core_Kd;
+    float Ki = (core->Ti > 0.0f) ? (pid_dt / core->Ti) : 0.0f;  /* Ki = Δt/Ti，Ti=0 表示不用积分 */
+    float Kd = (pid_dt > 0.0f) ? (core->Td / pid_dt) : 0.0f;    /* Kd = Td/Δt */
 
-    /* 步骤 1：计算外环误差 */
-    shell->eK = shell_err;
-    shell->output = shell->Kp * shell->eK;
-    shell->eK_1 = shell->eK;
+    /* ---- 步骤 1、2：外环（角度环，纯 P）---- */
+    shell->eK     = shell_err;
+    shell->output = shell->Kp * shell->eK;      /* 输出就是期望角速度 ω_des */
+    shell->eK_1   = shell->eK;
 
-    /* 步骤 2：外环输出作为内环期望 */
-    /* 步骤 3：计算内环误差 */
+    /* ---- 步骤 3：内环误差 ---- */
     core->eK = shell->output - core_status;
 
-    /* 步骤 4：内环积分分离限幅 */
-    core_Ki = pid_dt / core->Ti;
-    core_Kd = core->Td / pid_dt;
-
-    if (core->eSum > CORE_INT_MAX) {
-        if (core->eK < 0) {
-            core->eSum += core->eK;
-        }
-    } else if (core->eSum < -CORE_INT_MAX) {
-        if (core->eK > 0) {
-            core->eSum += core->eK;
-        }
-    } else {
+    /* ---- 步骤 4：积分处理 ---- */
+    /* 4.1 积分分离：误差很大时先不积分（大偏差下积分只会让回中更超调），
+     *     只有转速误差回到 CORE_INT_SEP(20°/s) 以内才开始累积。 */
+    if ((Ki > 0.0f) && (fabsf(core->eK) < CORE_INT_SEP)) {
         core->eSum += core->eK;
+
+        /* 4.2 积分限幅（windup 保护）：限制的是"积分项的贡献"Ki·Σe，
+         *     不是 Σe 本身，这样限幅值和 PID 输出在同一量纲（PWM），
+         *     调参时直觉更清楚：积分最多只能贡献 ±CORE_INT_MAX。 */
+        if ((core->eSum * Ki) > CORE_INT_MAX) {
+            core->eSum = CORE_INT_MAX / Ki;
+        } else if ((core->eSum * Ki) < -CORE_INT_MAX) {
+            core->eSum = -CORE_INT_MAX / Ki;
+        }
     }
 
-    /* 步骤 5：内环输出 */
-    core->output = core->Kp * (core->eK + core->eSum * core_Ki + (core->eK - core->eK_1) * core_Kd);
+    /* ---- 步骤 5：内环 PID 输出 ---- */
+    core->output = core->Kp * (core->eK
+                               + core->eSum * Ki
+                               + (core->eK - core->eK_1) * Kd);
+
+    /* ---- 步骤 6：输出限幅（单轴不允许把油门直接顶到饱和）---- */
     core->output = PID_Limit(core->output, PID_OUT_MIN, PID_OUT_MAX);
-    core->eK_1 = core->eK;
+    core->eK_1   = core->eK;
 
     return core->output;
 }
 
-float PID_Single_Calc(float err, float status, PID_t *pid)
+float PID_Single_Calc(float err, PID_t *pid)
 {
-    /* 单环 PID 计算（Yaw/Thr）
+    /* 单环 PD 计算（偏航）
      *
-     * 公式：output = Kp*(e + (e-eK_1)*Kd)  (PD)
+     * 偏航不接角度环：摇杆直接给"期望角速度"，所以只有一级。
+     * 公式：M = Kp·( e_rate + Kd·Δe_rate )
+     * 单位：e_rate 为度/秒，M 为 PWM 增量。
      *
-     * 步骤：
-     *   1. 计算误差 e = err
-     *   2. 计算微分项 (e - eK_1) * Kd
-     *   3. 输出 = Kp * (e + 微分项)
-     *   4. 限幅
+     * 说明：偏航不加积分，是因为偏航没有"绝对期望角度"，
+     *      积分容易把陀螺零偏的残差一直累加，导致缓慢自旋。
      */
 
-    float Kd = pid->Td / pid_dt;
+    float Kd = (pid_dt > 0.0f) ? (pid->Td / pid_dt) : 0.0f;
 
-    pid->eK = err;
+    pid->eK     = err;
     pid->output = pid->Kp * (pid->eK + (pid->eK - pid->eK_1) * Kd);
     pid->output = PID_Limit(pid->output, PID_OUT_MIN, PID_OUT_MAX);
-    pid->eK_1 = pid->eK;
+    pid->eK_1   = pid->eK;
 
     return pid->output;
 }
 
 void PID_Motor_Calc(void)
 {
-    /* 电机混控计算
+    /* 串级 PID 主计算 + 电机混控
      *
-     * 将 PID 输出映射到 4 路电机 PWM。
-     *
-     * 公式（参考笔记 C3 控制力矩映射矩阵）：
-     *   motor1 = thr - pitch + roll - yaw
-     *   motor2 = thr - pitch - roll + yaw
-     *   motor3 = thr + pitch + roll + yaw
-     *   motor4 = thr + pitch - roll - yaw
+     * 两个串（外环角度环、内环角速度环）都在本函数里、用同一个 dt 算完：
+     *   - 时间基准一致，不会出现"外环用 20ms、内环用 10ms"的混乱；
+     *   - 只被 MotorTask 调用，不存在多任务并发改同一组 PID 状态的问题。
      *
      * 步骤：
-     *   1. 计算 Roll/Pitch/Yaw PID 输出
-     *   2. 按混控公式计算 4 路电机
-     *   3. 限幅到 [PWM_OUT_MIN, PWM_OUT_MAX]
-     *   4. 安全保护检查
+     *   0. 取采样周期 Δt（TIM4 实测，带异常保护）
+     *   1. 传感器量换算单位（rad → °, rad/s → °/s）
+     *   2. Roll / Pitch 串级 PID
+     *   3. Yaw 单环 PD
+     *   4. X 型混控 → 4 路 PWM
+     *   5. 安全保护检查
      */
 
-    /* 步骤 1：计算 PID 采样周期 */
-    pid_dt = PID_Get_Time();
+    /* ---- 步骤 0：采样周期 ---- */
+    float dt = PID_Get_Time();
+    if ((dt <= 0.0005f) || (dt > PID_DT_MAX)) {
+        /* 首次调用、被高优先级任务打断很久、或 TIM4 计数器回绕时会读到离谱值，
+         * 这时退回标称 20ms，否则 Ki=Δt/Ti 会瞬间变得极大 → 输出爆掉 */
+        dt = PID_DT_NOMINAL;
+    }
+    pid_dt = dt;
 
-    /* 步骤 1：计算 Roll/Pitch/Yaw PID 输出 */
-    float pid_roll  = PID_Cascade_Calc(expectation.roll - euler_angle.roll,
-                                       gyro_body.y, &roll_shell, &roll_core);
-    float pid_pitch = PID_Cascade_Calc(expectation.pitch - euler_angle.pitch,
-                                       -gyro_body.x, &pitch_shell, &pitch_core);
-    float pid_yaw   = PID_Single_Calc(expectation.yaw - gyro_body.z,
-                                      gyro_body.z, &yaw_core);
+    /* ---- 步骤 1：单位换算 ----
+     * 轴对应关系（与 imu.c 的四元数/欧拉角约定严格一致，切勿改成本科教材以外的顺序）：
+     *   imu.c 里 R_q = C_b^e，欧拉角按 Z-Y-X 外旋提取：
+     *     roll  φ 绕机体系 +x 轴
+     *     pitch θ 绕机体系 +y 轴
+     *     yaw   ψ 绕机体系 +z 轴
+     *   因此角速度反馈也必须是同一组轴：
+     *     φ̇ ≈ ω_x = gyro_body.x
+     *     θ̇ ≈ ω_y = gyro_body.y
+     *     ψ̇ ≈ ω_z = gyro_body.z
+     *   （小角度下三个欧拉角速度就近似等于机体角速度的三个分量。）
+     * 实机若发现某个轴"越修正越偏"，就是这里的符号取反了，改一行即可。
+     */
+    float roll_deg   =  euler_angle.roll  * RAD_TO_DEG;
+    float pitch_deg  =  euler_angle.pitch * RAD_TO_DEG;
+    float roll_rate  =  gyro_body.x * RAD_TO_DEG;
+    float pitch_rate =  gyro_body.y * RAD_TO_DEG;
+    float yaw_rate   =  gyro_body.z * RAD_TO_DEG;
 
-    /* 步骤 2：按混控公式计算 4 路电机 */
-    /* X 型布局：电机 1=左前, 2=右前, 3=左后, 4=右后 */
-    /* 注意：这里的符号需要根据实际电机转向调整 */
+    /* ---- 步骤 2：Roll / Pitch 串级 PID（外环 + 内环）---- */
+    float pid_roll  = PID_Cascade_Calc(expectation.roll  - roll_deg,
+                                      roll_rate,  &roll_shell,  &roll_core);
+    float pid_pitch = PID_Cascade_Calc(expectation.pitch - pitch_deg,
+                                       pitch_rate, &pitch_shell, &pitch_core);
+
+    /* ---- 步骤 3：Yaw 单环 PD ---- */
+    float pid_yaw   = PID_Single_Calc(expectation.yaw - yaw_rate, &yaw_core);
+
+    /* ---- 步骤 4：X 型混控（笔记 C3 的控制力矩映射矩阵）----
+     * 电机布局：1=左前  2=右前  3=左后  4=右后
+     * 符号前提（见说明文档第二节"全局约定"）：
+     *   roll > 0  = 左侧抬起 / 右侧下沉
+     *   pitch > 0 = 机头下沉（低头）
+     *   yaw  > 0  = 从机顶俯视逆时针（机头左转）
+     * 于是各轴 PID 输出的物理含义是：
+     *   pid_pitch > 0 → 前电机减速、后电机加速 → 机头下沉
+     *   pid_roll  > 0 → 左电机加速、右电机减速 → 左侧抬起
+     *   pid_yaw   > 0 → 1、4 减速、2、3 加速 → 对角差动
+     * 注意：yaw 的正负与电机转向（正反桨）有关，首飞前务必核对螺旋桨转向。
+     */
     motor_out.motor1 = PID_Limit(expectation.thr - pid_pitch + pid_roll - pid_yaw,
                                  PWM_OUT_MIN, PWM_OUT_MAX);
     motor_out.motor2 = PID_Limit(expectation.thr - pid_pitch - pid_roll + pid_yaw,
@@ -317,8 +392,22 @@ void PID_Motor_Calc(void)
     motor_out.motor4 = PID_Limit(expectation.thr + pid_pitch - pid_roll - pid_yaw,
                                  PWM_OUT_MIN, PWM_OUT_MAX);
 
-    /* 步骤 4：安全保护检查 */
+    /* ---- 步骤 5：安全保护（未解锁/倾角超限时会把上面算出的值全部改回怠速）---- */
     PID_Safety_Check();
+}
+
+void PID_Control_Update(void)
+{
+    /* 串级 PID 的唯一对外入口（MotorTask 每 20ms 调一次）
+     *
+     * 顺序很重要：
+     *   期望值 → 飞行模式/解锁 → PID+混控 → 输出 PWM
+     * 如果先算 PID 再判解锁，会出现"解锁瞬间用了上一周期没清零的积分"的问题。
+     */
+    PID_Exp_Calc();                          /* 遥控器 → 期望姿态/油门（°、°/s、PWM） */
+    PID_FlyMode_Update(expectation.thr);     /* 油门推过 1350 才解锁 armed=1 */
+    PID_Motor_Calc();                        /* 外环+内环+混控（同一个 dt） */
+    PID_Motor_Output();                      /* 写入 TIM3 四路 CCR */
 }
 
 void PID_Motor_Output(void)
@@ -375,17 +464,19 @@ void PID_Safety_Check(void)
         motor_out.motor3 = PWM_IDLE;
         motor_out.motor4 = PWM_IDLE;
         armed = 0;
+        PID_Reset_All();    /* 电机停转 → 积分清零，防止地面推杆把积分撑满 */
         return;
     }
 
     /* 步骤 2：检查倾斜角 */
-    if (fabs(roll_deg) > ANGLE_LIMIT_DEG || fabs(pitch_deg) > ANGLE_LIMIT_DEG) {
+    if (fabsf(roll_deg) > ANGLE_LIMIT_DEG || fabsf(pitch_deg) > ANGLE_LIMIT_DEG) {
         /* 步骤 4：停转 */
         motor_out.motor1 = PWM_IDLE;
         motor_out.motor2 = PWM_IDLE;
         motor_out.motor3 = PWM_IDLE;
         motor_out.motor4 = PWM_IDLE;
         armed = 0;
+        PID_Reset_All();    /* 姿态已经救不回来 → 清积分，落地后重新开始 */
         return;
     }
 
@@ -396,6 +487,7 @@ void PID_Safety_Check(void)
         motor_out.motor2 = PWM_IDLE;
         motor_out.motor3 = PWM_IDLE;
         motor_out.motor4 = PWM_IDLE;
+        PID_Reset_All();    /* 解锁前始终保持积分器为 0 */
     }
 }
 
