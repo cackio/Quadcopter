@@ -15,6 +15,7 @@
 /* ============================================================================
  *  全局变量定义
  * ========================================================================== */
+
 PID_t          roll_shell = {0, 0, 0, ROLL_SHELL_KP, 0, 0, 0};
 PID_t          roll_core  = {0, 0, 0, ROLL_CORE_KP, ROLL_CORE_TI, ROLL_CORE_TD, 0};
 PID_t          pitch_shell = {0, 0, 0, PITCH_SHELL_KP, 0, 0, 0};
@@ -33,6 +34,7 @@ uint8_t        armed        = 0;
 /* ============================================================================
  *  初始化函数
  * ========================================================================== */
+
 void PID_Init(void){
     /* PID控制器初始化 */
     /* main中调用 */
@@ -54,7 +56,7 @@ void PID_Init(void){
     thr_shell.Td = THR_SHELL_TD;
 
     /* 2. 初始化期望值结构体 */
-    eexpectation.roll  = 0.0f;
+    expectation.roll  = 0.0f;
     expectation.pitch = 0.0f;
     expectation.yaw   = 0.0f;
     expectation.thr   = PWM_IDLE;       // 期望怠速
@@ -84,8 +86,8 @@ void PID_Time_Init(void){
 
 float PID_Get_Time(void){
     /**
-     * 测量从上一次pid开始到现在过去多少秒
-     * 用在PID计算里的Δt
+     * 获取 PID 采样周期，用在PID计算里的Δt
+     * 这里是根据MotorTask里的OSTimeDlyHMSM(0,0,0,20)监测TIM4，所以周期和MotorTask一样，后面需要改
      * PID_Time_Init() 把TIM4配置成1MHz，转化成秒除1000000
      * 读TIM4计数差值，返回格式秒
      */
@@ -100,18 +102,63 @@ float PID_Get_Time(void){
     return temp;
 }
 
+
+/* ============================================================================
+ *  遥控器期望值映射
+ * ========================================================================== */
+
 void PID_PPM_to_Exp_Calc(void){
+    /**
+     * 遥控器期望值计算，将PPM_Values映射为期望姿态和油门。
+     * PPM_Values在bsp.h中，PPM遥控信号8通道值：
+     * 通道0:横滚  通道1:俯仰  通道2:油门  通道3:偏航  通道4-7: 辅助通道（拨杆、旋钮等）
+     * 公式：expRoll = (PPM[ROLL] - 1500) * 0.03f (最大 20°) 
+     *      expPitch = (PPM[PITCH] - 1500) * 0.04f (最大 20°) 
+     *      expYaw = (PPM[YAW] - 1500) * 0.02f (最大 10°/s) 
+     *      expThr = PPM[THR]
+     */
+
+    uint16_t ppm_roll, ppm_pitch, ppm_yaw, ppm_thr;
+
+    /* 1. 读取 PPM_Values（关中断保护） */
+    OS_CPU_SR cpu_sr = 0;
+    OS_ENTER_CRITICAL();
+    ppm_roll = PPM_Values[PPM_CH_ROLL];
+    ppm_pitch = PPM_Values[PPM_CH_PITCH];
+    ppm_thr = PPM_Values[PPM_CH_THR];
+    ppm_yaw = PPM_Values[PPM_CH_YAW];
+    OS_EXIT_CRITICAL();
+
+    /* 2. 限幅到有效范围 */
+    ppm_roll = PID_Limit(ppm_roll, 1000, 2000);
+    ppm_pitch = PID_Limit(ppm_pitch, 1000, 2000);
+    ppm_thr = PID_Limit(ppm_thr, 1000, 2000);
+    ppm_yaw = PID_Limit(ppm_yaw, 1000, 2000);
+
+    /* 3. 转换为期望值（°或者°/s） */
+    /* 这里先做归一化，然后转换成期望单位。方便之后改动。 */
+    float exp_roll = PID_To1(ppm_roll, 1000, 2000, -1, 1);
+    float exp_pitch = PID_To1(ppm_pitch, 1000, 2000, -1, 1);
+    float exp_thr = PID_To1(ppm_thr, 1000, 2000, 0, 1);
+    float exp_yaw = PID_To1(ppm_yaw, 1000, 2000, -1, 1);
+
+    expectation.roll = PID_To1(exp_roll, -1, 1, -EXP_ROLL_MAX, EXP_ROLL_MAX);
+    expectation.pitch = PID_To1(exp_pitch, -1, 1, -EXP_PITCH_MAX, EXP_PITCH_MAX);
+    expectation.yaw = PID_To1(exp_yaw, -1, 1, -EXP_YAW_RATE_MAX, EXP_YAW_RATE_MAX);
+    expectation.thr = exp_thr;
 
 }
+
 
 /* ============================================================================
  *  PID 计算
  * ========================================================================== */
+
 float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *core){
 
     /**
-     * 核心部分
-     * 串级PID运算
+     * ！！核心部分！！
+     * 串级PID运算（Roll/Pitch）
      * 
      * shell:外环  core:内环
      * 公式：
@@ -128,7 +175,6 @@ float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *
      *          且采样周期Δt变了不用重调参。
      */
 
-    float dt = PID_Get_Time();
     float Kp_shell = shell->Kp;
     float Kp_core = core->Kp;
     float Ki_core = (core->Ti=0) ?  0.0f : (dt / core->Ti);
@@ -156,20 +202,35 @@ float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *
     }
 
     /* 5. 内环PID输出 = Kp*(e + Ki*eSum + Kd*(e-eK_1)) */
-    float core->output = Kp_core * (core->eK 
+    core->output = Kp_core * (core->eK 
                         + Ki_core * core->eSum
                         + Kd_core * (core->eK - core->eK_1) );
     core->eK_1 = core->eK; 
 
     /* 6. 输出限幅 */
-    PID_Limit(core->output, PID_OUT_MIN, PID_OUT_MAX);
-
+    core->output = PID_Limit(core->output, PID_OUT_MIN, PID_OUT_MAX);
 
     return core->output;
 
 }
 
 float PID_Single_Calc(float err, PID_t *pid){
+    /**
+     * 单环PID计算（Yaw）
+     * 其实Yaw也该用串级。后续会修改。
+     * 公式：output = Kp*(e + (e-eK_1)*Kd) 
+     */
+
+    float Kp = pid->Kp;
+    float Kd = pid->Td / dt;
+    pid->eK = err;
+
+    pid->output = Kp * (pid->eK + Kd * (pid->eK - pid->eK_1));
+    pid->eK_1 = pid->eK;
+
+    pid->output = PID_Limit(pid->output, PID_OUT_MIN, PID_OUT_MAX);
+
+    return pid->output;
 
 }
 
@@ -196,9 +257,15 @@ void PID_FlyMode_Update(float exp_thr){
 /* ============================================================================
  *  工具函数
  * ========================================================================== */
-void PID_Limit(float value, float min, float max){
+
+float PID_Limit(float value, float min, float max){
     /* 限制value的输出范围:[min, max] */
     if (value < min) return min;
     if (value > max) return max;
     return value;
+}
+
+float PID_To1(float value, float min_in, float max_in, float min_out, float max_out){
+    /* 归一化 */
+    return ((value-min_in)/(max_in-min_in)) * ((max_out-max_in)) + min_out;
 }

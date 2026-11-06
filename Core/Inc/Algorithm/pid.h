@@ -146,7 +146,7 @@ extern PID_t          thr_shell;                 /* 油门外环 PID */
 extern Expectation_t  expectation;                /* 遥控器期望值 */
 extern FlyMode_t      fly_mode;                   /* 飞行模式 */
 extern MotorOutput_t  motor_out;                  /* 电机输出 */
-extern float          pid_dt;                     /* PID 采样周期 */
+extern float          dt;                         /* PID 采样周期 */
 extern uint8_t        armed;                      /* 解锁标志 */
 
 /* ============================================================================
@@ -171,7 +171,6 @@ void PID_Init(void);
  * @brief PID 采样周期初始化（TIM4）
  *
  * 用于精确测量 PID 计算间隔。
- * 参考学长 pid.c 的 PID_Time_Init。
  *
  * 步骤：
  *   1. 使能 TIM4 时钟
@@ -198,7 +197,7 @@ float PID_Get_Time(void);
  *
  * 将 PPM_Values 映射为期望姿态和油门。
  *
- * 公式（参考学长 Motor_Exp_Calc）：
+ * 公式：
  *   expRoll  = (PPM[ROLL] - 1500) * 0.03f  (最大 20°)
  *   expPitch = (PPM[PITCH] - 1500) * 0.04f  (最大 20°)
  *   expYaw   = (PPM[YAW] - 1500) * 0.02f  (最大 10°/s)
@@ -224,7 +223,7 @@ void PID_PPM_to_Exp_Calc(void);
  * @param core 内环 PID
  * @return 内环输出
  *
- * 公式（参考笔记 PID.md 第五节）：
+ * 公式：
  *   外环（角度环）：output = Kp * e
  *   内环（角速度环）：output = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
  *
@@ -332,6 +331,15 @@ void PID_FlyMode_Update(float exp_thr);
  * @return 限幅后的值
  */
 float PID_Limit(float value, float min, float max);
+
+/**
+ * @brief 归一化函数，把value[min_in:max_in]归化到范围:[min_out:max_out]
+ * @param value 输入值
+ * @param min 最小值（含）
+ * @param max 最大值（含）
+ * @return 归一化后的值
+ */
+float PID_To1(float value, float min_in, float max_in, float min_out, float max_out);
 
 #ifdef __cplusplus
 }

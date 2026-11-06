@@ -137,8 +137,7 @@ void MotorTask(void *p_arg)
         *   4. PID_Motor_Output  混控结果写进 TIM3 四路 CCR
         *
         * 控制周期 20ms（50Hz），和 PID_Get_Time() 实测的 Δt 一致。
-        * 内环理论上可以跑到 5~10ms 响应更快，但为了满足“两个串在一个任务里”，
-        * 同时不让电机任务挤占 SensorTask 的 CPU，这里统一 50Hz。
+        * 先暂时把PID放这里，之后会把PID做成单独的任务独立出来。
         */
       PID_Control_Update();
 
