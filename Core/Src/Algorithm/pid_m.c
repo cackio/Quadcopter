@@ -112,10 +112,7 @@ void PID_PPM_to_Exp_Calc(void){
      * 遥控器期望值计算，将PPM_Values映射为期望姿态和油门。
      * PPM_Values在bsp.h中，PPM遥控信号8通道值：
      * 通道0:横滚  通道1:俯仰  通道2:油门  通道3:偏航  通道4-7: 辅助通道（拨杆、旋钮等）
-     * 公式：expRoll = (PPM[ROLL] - 1500) * 0.03f (最大 20°) 
-     *      expPitch = (PPM[PITCH] - 1500) * 0.04f (最大 20°) 
-     *      expYaw = (PPM[YAW] - 1500) * 0.02f (最大 10°/s) 
-     *      expThr = PPM[THR]
+     * 利用归一化将PPM值映射到期望值（°或者°/s）
      */
 
     uint16_t ppm_roll, ppm_pitch, ppm_yaw, ppm_thr;
@@ -146,6 +143,7 @@ void PID_PPM_to_Exp_Calc(void){
     expectation.pitch = PID_To1(exp_pitch, -1, 1, -EXP_PITCH_MAX, EXP_PITCH_MAX);
     expectation.yaw = PID_To1(exp_yaw, -1, 1, -EXP_YAW_RATE_MAX, EXP_YAW_RATE_MAX);
     expectation.thr = exp_thr;
+    /* 这里用了归一化就不用再限幅了 */
 
 }
 
@@ -217,7 +215,7 @@ float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *
 float PID_Single_Calc(float err, PID_t *pid){
     /**
      * 单环PID计算（Yaw）
-     * 其实Yaw也该用串级。后续会修改。
+     * @todo:其实Yaw也该用串级。后续会修改。
      * 公式：output = Kp*(e + (e-eK_1)*Kd) 
      */
 
@@ -235,6 +233,78 @@ float PID_Single_Calc(float err, PID_t *pid){
 }
 
 void PID_Motor_Calc(void){
+    /**
+     * 电机混控计算
+     * 将PID输出映射到4路电机PWM。
+     * 公式： motor1 = thr - pitch + roll - yaw
+     *       motor2 = thr - pitch - roll + yaw
+     *       motor3 = thr + pitch + roll + yaw
+     *       motor4 = thr + pitch - roll - yaw
+     */
+
+    dt = PID_Get_Time();
+    if ((dt <= 0.0005f) || (dt > PID_DT_MAX)){
+        /* 首次调用、被高优先级任务打断很久、或TIM4计数器回绕时dt很大，
+         * 这时退回标称，否则Ki=dt/Ti会瞬间变得极大 */
+        dt = PID_DT_NOMINAL;
+    }
+    
+    /* 1. 换算 */
+    /**
+     * 轴对应关系（与 imu.c 的四元数/欧拉角约定一致）：
+     *  imu.c 里 R_q = C_b^e，欧拉角按 Z-Y-X 外旋提取：
+     *     roll  φ 绕机体系 +x 轴
+     *     pitch θ 绕机体系 +y 轴
+     *     yaw   ψ 绕机体系 +z 轴
+     *   因此角速度反馈也必须是同一组轴：
+     *     φ̇ ≈ ω_x = gyro_body.x
+     *     θ̇ ≈ ω_y = gyro_body.y
+     *     ψ̇ ≈ ω_z = gyro_body.z
+     *   （小角度下三个欧拉角速度就近似等于机体角速度的三个分量。）
+     * 实机若发现某个轴"越修正越偏"，就是这里的符号取反了，改一行即可。
+     * @todo:此处有严重问题。待修改为四元数。
+     */
+    float roll_deg = euler_angle.roll * RAD_TO_DEG;
+    float pitch_deg = euler_angle.pitch * RAD_TO_DEG;
+    float yaw_deg = euler_angle.yaw * RAD_TO_DEG;
+    float roll_rate = gyro_body.x * RAD_TO_DEG;
+    float pitch_rate = gyro_body.y * RAD_TO_DEG;
+    float yaw_rate = gyro_body.z * RAD_TO_DEG;
+
+    /* 2. 计算 Roll/Pitch/Yaw PID 输出 */
+    float e_roll = expectation.roll - roll_deg;
+    float e_pitch = expectation.pitch - pitch_deg;
+    float M_roll = PID_Cascade_Calc(e_roll, roll_rate, &roll_shell, &roll_core);
+    float M_pitch = PID_Cascade_Calc(e_pitch, pitch_rate, &pitch_shell, &pitch_core);
+
+    float e_yaw_rate = expectation.yaw - yaw_rate;
+    float M_yaw = PID_Single_Calc(e_yaw_rate, &yaw_core);
+
+    /* 3. 按混控公式计算4路电机 */
+    /**
+     * 电机布局：1=左前  2=右前  3=左后  4=右后
+     * 符号前提：
+     *   roll > 0  = 左侧抬起 / 右侧下沉
+     *   pitch > 0 = 机头下沉（低头）
+     *   yaw  > 0  = 从机顶俯视逆时针（机头左转）
+     * 于是各轴 PID 输出的物理含义是：
+     *   pid_pitch > 0 → 前电机减速、后电机加速 → 机头下沉
+     *   pid_roll  > 0 → 左电机加速、右电机减速 → 左侧抬起
+     *   pid_yaw   > 0 → 1、4 减速、2、3 加速 → 对角差动
+     * 注意：yaw 的正负与电机转向（正反桨）有关，首飞前务必核对螺旋桨转向。
+     * @todo:研究具体分配
+     */
+    motor_out.motor1 = PID_Limit(expectation.thr - M_pitch + M_roll - M_yaw,
+                                 PWM_OUT_MIN, PWM_OUT_MAX);
+    motor_out.motor2 = PID_Limit(expectation.thr - M_pitch - M_roll + M_yaw,
+                                 PWM_OUT_MIN, PWM_OUT_MAX);
+    motor_out.motor3 = PID_Limit(expectation.thr + M_pitch + M_roll + M_yaw,
+                                 PWM_OUT_MIN, PWM_OUT_MAX);
+    motor_out.motor4 = PID_Limit(expectation.thr + M_pitch - M_roll - M_yaw,
+                                 PWM_OUT_MIN, PWM_OUT_MAX);
+
+    /* 4. 安全保护检查（未解锁/倾角超限时会把上面算出的值全部改回怠速） */
+    PID_Safety_Check();
 
 }
 

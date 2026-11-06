@@ -196,18 +196,13 @@ float PID_Get_Time(void);
  * @brief 遥控器期望值计算
  *
  * 将 PPM_Values 映射为期望姿态和油门。
+ * 得到的结果输出在全局变量expectation中（包括roll, pitch, yaw, thr）
  *
- * 公式：
- *   expRoll  = (PPM[ROLL] - 1500) * 0.03f  (最大 20°)
- *   expPitch = (PPM[PITCH] - 1500) * 0.04f  (最大 20°)
- *   expYaw   = (PPM[YAW] - 1500) * 0.02f  (最大 10°/s)
- *   expThr   = PPM[THR]
  *
  * 步骤：
  *   1. 读取 PPM_Values（关中断保护）
  *   2. 限幅到有效范围
  *   3. 转换为期望值（度 / 度每秒，全程不转弧度）
- *   4. 按 EXP_*_MAX 再限一次幅
  */
 void PID_PPM_to_Exp_Calc(void);
 
