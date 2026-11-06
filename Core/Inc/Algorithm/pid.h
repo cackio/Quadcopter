@@ -210,7 +210,7 @@ float PID_Get_Time(void);
  *   3. 转换为期望值（度 / 度每秒，全程不转弧度）
  *   4. 按 EXP_*_MAX 再限一次幅
  */
-void PID_Exp_Calc(void);
+void PID_PPM_to_Exp_Calc(void);
 
 /* ============================================================================
  *  PID 计算
@@ -218,8 +218,8 @@ void PID_Exp_Calc(void);
 
 /**
  * @brief 串级 PID 计算（Roll/Pitch）
- * @param shell_err 外环误差（角度误差，°）
- * @param core_status 内环反馈（角速度，°/s）
+ * @param shell_err 外环需要输入的角度误差（°）
+ * @param core_w_last 内环需要输入的反馈角速度（°/s）
  * @param shell 外环 PID
  * @param core 内环 PID
  * @return 内环输出
@@ -231,12 +231,12 @@ void PID_Exp_Calc(void);
  * 步骤：
  *   1. 计算外环误差 e = shell_err
  *   2. 外环输出 = Kp * e
- *   3. 计算内环误差 e = 外环输出 - core_status
+ *   3. 计算内环误差 e = 外环输出 - core_w_last
  *   4. 内环积分分离限幅
  *   5. 内环输出 = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
  *   6. 内环输出限幅
  */
-float PID_Cascade_Calc(float shell_err, float core_status, PID_t *shell, PID_t *core);
+float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *core);
 
 /**
  * @brief 单环 PD 计算（偏航）
@@ -325,10 +325,10 @@ void PID_FlyMode_Update(float exp_thr);
  * ========================================================================== */
 
 /**
- * @brief 限幅函数
+ * @brief 限幅函数，限制value的输出范围:[min, max]
  * @param value 输入值
- * @param min 最小值
- * @param max 最大值
+ * @param min 最小值（含）
+ * @param max 最大值（含）
  * @return 限幅后的值
  */
 float PID_Limit(float value, float min, float max);

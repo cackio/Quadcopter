@@ -171,7 +171,7 @@ float PID_Get_Time(void)
  *  遥控器期望值映射
  * ========================================================================== */
 
-void PID_Exp_Calc(void)
+void PID_PPM_to_Exp_Calc(void)
 {
     /* 遥控器期望值计算
      *
@@ -225,7 +225,7 @@ void PID_Exp_Calc(void)
  *  PID 计算
  * ========================================================================== */
 
-float PID_Cascade_Calc(float shell_err, float core_status, PID_t *shell, PID_t *core)
+float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *core)
 {
     /* 串级 PID 计算（Roll/Pitch）
      *
@@ -265,7 +265,7 @@ float PID_Cascade_Calc(float shell_err, float core_status, PID_t *shell, PID_t *
     shell->eK_1   = shell->eK;
 
     /* ---- 步骤 3：内环误差 ---- */
-    core->eK = shell->output - core_status;
+    core->eK = shell->output - core_w_last;
 
     /* ---- 步骤 4：积分处理 ---- */
     /* 4.1 积分分离：误差很大时先不积分（大偏差下积分只会让回中更超调），
@@ -404,7 +404,7 @@ void PID_Control_Update(void)
      *   期望值 → 飞行模式/解锁 → PID+混控 → 输出 PWM
      * 如果先算 PID 再判解锁，会出现"解锁瞬间用了上一周期没清零的积分"的问题。
      */
-    PID_Exp_Calc();                          /* 遥控器 → 期望姿态/油门（°、°/s、PWM） */
+    PID_PPM_to_Exp_Calc();                          /* 遥控器 → 期望姿态/油门（°、°/s、PWM） */
     PID_FlyMode_Update(expectation.thr);     /* 油门推过 1350 才解锁 armed=1 */
     PID_Motor_Calc();                        /* 外环+内环+混控（同一个 dt） */
     PID_Motor_Output();                      /* 写入 TIM3 四路 CCR */
