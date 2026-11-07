@@ -136,6 +136,14 @@ typedef struct
     float thr;        /* 期望油门 (PWM，1000~2000) */
 } Expectation_t;
 
+/* 角速度结构体 */
+typedef struct
+{
+    float roll;
+    float pitch;
+    float yaw;
+} Rate_t;
+
 /* ============================================================================
  *  全局变量（定义在 pid.c，extern 引用）
  * ========================================================================== */
@@ -150,6 +158,7 @@ extern FlyMode_t      fly_mode;                   /* 飞行模式 */
 extern MotorOutput_t  motor_out;                  /* 电机输出 */
 extern float          dt;                         /* PID 采样周期 */
 extern uint8_t        armed;                      /* 解锁标志 */
+extern Rate_t         exp_w;                      /* 期望角速度 */
 
 /* ============================================================================
  *  初始化函数
@@ -212,27 +221,63 @@ void PID_PPM_to_Exp_Calc(void);
  *  PID 计算
  * ========================================================================== */
 
-/**
- * @brief 串级 PID 计算（Roll/Pitch）
+
+ /**
+ * @brief 外环PID计算（Roll/Pitch）
  * @param shell_err 外环需要输入的角度误差（°）
- * @param core_w_last 内环需要输入的反馈角速度（°/s）
  * @param shell 外环 PID
- * @param core 内环 PID
- * @return 内环输出
+ * @return 外环输出目标角速度
  *
  * 公式：
  *   外环（角度环）：output = Kp * e
- *   内环（角速度环）：output = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
  *
  * 步骤：
  *   1. 计算外环误差 e = shell_err
  *   2. 外环输出 = Kp * e
- *   3. 计算内环误差 e = 外环输出 - core_w_last
- *   4. 内环积分分离限幅
- *   5. 内环输出 = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
- *   6. 内环输出限幅
+ * 
  */
-float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *core);
+float PID_Cascade_Shell_Calc(float shell_err, PID_t *shell);
+
+/**
+ * @brief 内环PID计算（Roll/Pitch）
+ * @param exp_w （可能是外环输出的）目标角速度（°/s）
+ * @param core_w_last 内环需要输入的反馈角速度（°/s）
+ * @param core 内环 PID
+ * @return 内环输出
+ *
+ * 公式：
+ *   内环（角速度环）：output = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
+ *
+ * 步骤：
+ *   1. 计算内环误差 e = 外环输出 - core_w_last
+ *   2. 内环积分分离限幅
+ *   3. 内环输出 = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
+ *   4. 内环输出限幅
+ */
+float PID_Cascade_Core_Calc(float exp_w, float core_w_last, PID_t *core);
+
+
+// /**
+//  * @brief 串级 PID 计算（Roll/Pitch）
+//  * @param shell_err 外环需要输入的角度误差（°）
+//  * @param core_w_last 内环需要输入的反馈角速度（°/s）
+//  * @param shell 外环 PID
+//  * @param core 内环 PID
+//  * @return 内环输出
+//  *
+//  * 公式：
+//  *   外环（角度环）：output = Kp * e
+//  *   内环（角速度环）：output = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
+//  *
+//  * 步骤：
+//  *   1. 计算外环误差 e = shell_err
+//  *   2. 外环输出 = Kp * e
+//  *   3. 计算内环误差 e = 外环输出 - core_w_last
+//  *   4. 内环积分分离限幅
+//  *   5. 内环输出 = Kp*(e + eSum*Ki + (e-eK_1)*Kd)
+//  *   6. 内环输出限幅
+//  */
+// float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *core);
 
 /**
  * @brief 单环 PD 计算（偏航）

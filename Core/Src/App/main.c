@@ -53,11 +53,22 @@
 #define MOTOR_TASK_STK_SIZE    256   /* 1 KB   */
 #define UART_TASK_STK_SIZE     512   /* 2 KB，含 char data[220] 和 snprintf 的临时空间 */
 #define START_TASK_STK_SIZE    384   /* 1.5 KB，含 BSP_Init + 创建三个任务 */
+#define PIDSHELL_TASK_SIZE     256
+#define PIDCORE_TASK_SIZE      256
 
-#define START_TASK_PRIO         5
-#define SENSOR_TASK_PRIO       8
-#define MOTOR_TASK_PRIO        7
-#define UART_TASK_PRIO         9
+#define START_TASK_PRIO        5
+#define PIDSHELL_TASK_PRIO     6
+#define PIDCORE_TASK_PRIO      7
+#define SENSOR_TASK_PRIO       9
+#define MOTOR_TASK_PRIO        8
+#define UART_TASK_PRIO         10
+
+/* 每个任务的周期（单位：tick） 当前tick为10ms */
+#define SENSOR_TASK_PERIOD    1
+#define MOTOR_TASK_PERIOD     2
+#define UART_TASK_PERIOD      5
+#define PIDSHELL_TASK_PERIOD  4
+#define PIDCORE_TASK_PERIOD   1
 
 /* USER CODE END PD */
 
@@ -72,6 +83,8 @@ OS_STK StartTaskStk[START_TASK_STK_SIZE];
 OS_STK SensorTaskStk[SENSOR_TASK_STK_SIZE];
 OS_STK MotorTaskStk[MOTOR_TASK_STK_SIZE];
 OS_STK UartTaskStk[UART_TASK_STK_SIZE];
+OS_STK PIDShellTaskStk[PIDSHELL_TASK_SIZE];
+OS_STK PIDCoreTaskStk[PIDCORE_TASK_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -141,10 +154,7 @@ void MotorTask(void *p_arg)
         */
       PID_Control_Update();
 
-      /*
-        * 电机控制一般 20ms 更新一次
-        */
-      OSTimeDlyHMSM(0, 0, 0, 20);
+      OSTimeDly(MOTOR_TASK_PERIOD);
     }
 }
 void SensorTask(void *p_arg)
@@ -184,7 +194,7 @@ void SensorTask(void *p_arg)
          * 1 tick = 10ms（OS_TICKS_PER_SEC = 100），姿态更新 100Hz。
          * imu_dt 由 DWT 实测，周期抖动不会影响积分精度。
          */
-        OSTimeDly(1);
+        OSTimeDly(SENSOR_TASK_PERIOD);
     }
 }
 void UartTask(void *p_arg)
@@ -328,7 +338,31 @@ void UartTask(void *p_arg)
             HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
         }
 
-        OSTimeDly(5);    /* 5 tick = 50ms（OS_TICKS_PER_SEC = 100） */
+        OSTimeDly(UART_TASK_PERIOD);
+    }
+}
+
+void PIDShellTask(void *p_arg){
+
+    while(1) {
+
+      PID_PPM_to_Exp_Calc();      // 遥控器期望值计算
+      PID_FlyMode_Update(expectation.thr);    // 更新飞行模式.油门期望值只在外环监测期望值后发生变化，所以只在这里用就行
+      exp_w.roll  = PID_Cascade_Shell_Calc(expectation.roll  - euler_angle.roll  * RAD_TO_DEG, &roll_shell);
+      exp_w.pitch = PID_Cascade_Shell_Calc(expectation.pitch - euler_angle.pitch * RAD_TO_DEG, &pitch_shell);
+
+      OSTimeDly(PIDSHELL_TASK_PERIOD);
+    }
+}
+
+void PIDCoreTask(void *p_arg){
+
+    while(1) {
+
+      PID_Motor_Calc();           // 电机混控输出计算
+      PID_Motor_Output();         // 电机输出配置
+
+      OSTimeDly(PIDCORE_TASK_PERIOD);
     }
 }
 /* USER CODE END 0 */
@@ -510,6 +544,18 @@ void StartTask(void *p_arg)
                           &UartTaskStk[UART_TASK_STK_SIZE - 1],
                           UART_TASK_PRIO);
     OSTaskNameSet(UART_TASK_PRIO, (INT8U *)"Uart Task", &os_err);
+
+    os_err = OSTaskCreate(PIDShellTask,
+                          (void *)0,
+                          &PIDShellTaskStk[PIDSHELL_TASK_SIZE - 1],
+                          PIDSHELL_TASK_PRIO);
+    OSTaskNameSet(PIDSHELL_TASK_PRIO, (INT8U *)"PIDShell Task", &os_err);
+
+    os_err = OSTaskCreate(PIDCoreTask,
+                          (void *)0,
+                          &PIDCoreTaskStk[PIDCORE_TASK_SIZE - 1],
+                          PIDCORE_TASK_PRIO);
+    OSTaskNameSet(PIDCORE_TASK_PRIO, (INT8U *)"PIDCore Task", &os_err);
 
     /* 4. 初始化任务完成，自我删除 */
     (void)OSTaskDel(OS_PRIO_SELF);

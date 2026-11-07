@@ -33,8 +33,9 @@ PID_t          thr_shell  = {0, 0, 0, THR_SHELL_KP, 0, THR_SHELL_TD, 0};
 Expectation_t  expectation = {0, 0, 0, PWM_IDLE};
 FlyMode_t      fly_mode    = STOP; 
 MotorOutput_t  motor_out   = {PWM_IDLE, PWM_IDLE, PWM_IDLE, PWM_IDLE};
-float          dt           = PID_DT_NOMINAL;       // 默认是标称周期，正常时由PID_Get_Time测出来并赋值，异常时可以用这个兜底
-uint8_t        armed        = 0;     // 重要标志，锁定电机输出为0，防止上电/校准/异常时电机转动
+float          dt          = PID_DT_NOMINAL;       // 默认是标称周期，正常时由PID_Get_Time测出来并赋值，异常时可以用这个兜底
+uint8_t        armed       = 0;     // 重要标志，锁定电机输出为0，防止上电/校准/异常时电机转动
+Rate_t         exp_w       = {0, 0, 0};
 
 
 /** 
@@ -187,15 +188,35 @@ void PID_PPM_to_Exp_Calc(void){
  *  PID 计算
  * ========================================================================== */
 
-float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *core){
+float PID_Cascade_Shell_Calc(float shell_err, PID_t *shell){
 
     /**
-     * ！！核心部分！！
-     * 串级PID运算（Roll/Pitch）
-     * 
-     * shell:外环  core:内环
+     * 外环PID计算（Roll/Pitch）
+     *
      * 公式：
      *   外环：ω_exp = Kp_shell · e_angle
+     * 单位：e_angle 为度。
+     * 
+     */
+
+    float Kp_shell = shell->Kp;
+
+    /* 1. 计算外环角度误差 e_angle = shell_err */
+    shell->eK = shell_err;
+    /* 2. 外环纯P输出目标角速度 = Kp*e_angle */
+    shell->output = Kp_shell * shell->eK;
+    shell->eK_1 = shell->eK;         // 把这次的记成上一次的误差
+
+    return shell->output;
+
+}
+
+float PID_Cascade_Core_Calc(float exp_w, float core_w_last, PID_t *core){
+
+    /**
+     * 内环PID计算（Roll/Pitch）
+     *
+     * 公式：
      *   内环：M     = Kp_core · ( e_w + Ki·Σe_w + Kd·Δe_w )
      *   其中  Ki = Δt / Ti     （位置式积分，Δt 由 TIM4 实测）
      *         Kd = Td / Δt     （差分做微分）
@@ -208,20 +229,13 @@ float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *
      *          且采样周期Δt变了不用重调参。
      */
 
-    float Kp_shell = shell->Kp;
     float Kp_core = core->Kp;
     float Ki_core = (core->Ti==0) ?  0.0f : (dt / core->Ti);
     float Kd_core = core->Td / dt;
 
-    /* 1. 计算外环角度误差 e_angle = shell_err */
-    shell->eK = shell_err;
-    /* 2. 外环纯P输出目标角速度 = Kp*e_angle */
-    shell->output = Kp_shell * shell->eK;
-    shell->eK_1 = shell->eK;         // 把这次的记成上一次的误差
-
-    /* 3. 计算内环误差 eK = 外环输出 - core_w_last */
-    core->eK = shell->output - core_w_last;
-    /* 4. 积分项处理 */
+    /* 1. 计算内环误差 eK = 外环输出 - core_w_last */
+    core->eK = exp_w - core_w_last;
+    /* 2. 积分项处理 */
     /* 此处会处理积分饱和问题，暂时用积分分离，后续待尝试其他方法。 */
     /* a.积分分离：误差绝对值很大时先不积分，误差回到CORE_INT_SEP以内再积分 */
     if ((Ki_core > 0.0f) && (fabsf(core->eK) <= CORE_INT_SEP)){
@@ -234,18 +248,79 @@ float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *
         }
     }
 
-    /* 5. 内环PID输出 = Kp*(e + Ki*eSum + Kd*(e-eK_1)) */
+    /* 3. 内环PID输出 = Kp*(e + Ki*eSum + Kd*(e-eK_1)) */
     core->output = Kp_core * (core->eK 
                         + Ki_core * core->eSum
                         + Kd_core * (core->eK - core->eK_1) );
     core->eK_1 = core->eK; 
 
-    /* 6. 输出限幅 */
+    /* 4. 输出限幅 */
     core->output = PID_Limit(core->output, PID_OUT_MIN, PID_OUT_MAX);
 
     return core->output;
 
 }
+
+
+// float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *core){
+
+//     /**
+//      * ！！核心部分！！
+//      * 串级PID运算（Roll/Pitch）
+//      * 
+//      * shell:外环  core:内环
+//      * 公式：
+//      *   外环：ω_exp = Kp_shell · e_angle
+//      *   内环：M     = Kp_core · ( e_w + Ki·Σe_w + Kd·Δe_w )
+//      *   其中  Ki = Δt / Ti     （位置式积分，Δt 由 TIM4 实测）
+//      *         Kd = Td / Δt     （差分做微分）
+//      *   单位：e_angle 为度，e_rate 为度/秒，M 为 PWM 增量。
+//      * 
+//      * 补充说明：查阅资料得到，PID公式可以写成M = Kp_core · ( e_w + Ki·Σe_w + Kd·Δe_w )
+//      *          其中Ki = dt/Ti, Kd = Td/dt
+//      *          和原本的u = Kp·e + Ki·dt·Σe + Kd·Δe/dt相比，
+//      *          这样做的优点在于：和Kp解耦，Ti/Td形式里改Kp不影响积分时间和微分时间，三个参数可以独立整定。
+//      *          且采样周期Δt变了不用重调参。
+//      */
+
+//     float Kp_shell = shell->Kp;
+//     float Kp_core = core->Kp;
+//     float Ki_core = (core->Ti==0) ?  0.0f : (dt / core->Ti);
+//     float Kd_core = core->Td / dt;
+
+//     /* 1. 计算外环角度误差 e_angle = shell_err */
+//     shell->eK = shell_err;
+//     /* 2. 外环纯P输出目标角速度 = Kp*e_angle */
+//     shell->output = Kp_shell * shell->eK;
+//     shell->eK_1 = shell->eK;         // 把这次的记成上一次的误差
+
+//     /* 3. 计算内环误差 eK = 外环输出 - core_w_last */
+//     core->eK = shell->output - core_w_last;
+//     /* 4. 积分项处理 */
+//     /* 此处会处理积分饱和问题，暂时用积分分离，后续待尝试其他方法。 */
+//     /* a.积分分离：误差绝对值很大时先不积分，误差回到CORE_INT_SEP以内再积分 */
+//     if ((Ki_core > 0.0f) && (fabsf(core->eK) <= CORE_INT_SEP)){
+//         core->eSum += core->eK;
+//         /* b.积分限幅：限制积分项Ki·Σe在CORE_INT_MAX以内 */
+//         if ((Ki_core * core->eSum) > CORE_INT_MAX) {
+//             core->eSum = CORE_INT_MAX / Ki_core;
+//         }else if ((Ki_core * core->eSum) < -CORE_INT_MAX) {
+//             core->eSum = - CORE_INT_MAX / Ki_core;
+//         }
+//     }
+
+//     /* 5. 内环PID输出 = Kp*(e + Ki*eSum + Kd*(e-eK_1)) */
+//     core->output = Kp_core * (core->eK 
+//                         + Ki_core * core->eSum
+//                         + Kd_core * (core->eK - core->eK_1) );
+//     core->eK_1 = core->eK; 
+
+//     /* 6. 输出限幅 */
+//     core->output = PID_Limit(core->output, PID_OUT_MIN, PID_OUT_MAX);
+
+//     return core->output;
+
+// }
 
 float PID_Single_Calc(float err, PID_t *pid){
     /**
