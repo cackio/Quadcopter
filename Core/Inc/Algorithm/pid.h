@@ -63,8 +63,10 @@ extern "C" {
 /* 安全保护阈值 */
 #define ANGLE_LIMIT_DEG  65.0f     /* 倾斜角保护阈值 */
 #define THR_MIN          1050.0f   /* 油门最小值（低于此值停转） */
-#define THR_ARM          1350.0f   /* 起飞油门阈值 */
-#define THR_DISARM       1050.0f   /* 降落油门阈值 */
+#define THR_ARM_START    1350.0f   /* 起飞油门阈值 */
+#define THR_DISARM_FINI  1050.0f   /* 降落油门阈值 */
+#define THR_HOVER_to_UP  1650.0f   /* 状态转换阈值 */
+#define THR_HOVER_to_DOWN  1350.0f /* 状态转换阈值 */
 
 /* 默认 PID 参数 */
 #define ROLL_SHELL_KP    4.4f      /* Roll 外环 Kp */
@@ -109,10 +111,10 @@ typedef struct
 /* 飞行模式枚举 */
 typedef enum
 {
-    FLY_MODE_STOP = 0,    /* 停止 */
-    FLY_MODE_DOWN,        /* 下降 */
-    FLY_MODE_HOVER,       /* 悬停 */
-    FLY_MODE_UP           /* 上升 */
+    STOP = 0,    /* 停止 */
+    DOWN,        /* 下降 */
+    HOVER,       /* 悬停 */
+    UP           /* 上升 */
 } FlyMode_t;
 
 /* 电机输出结构体 */
@@ -299,7 +301,7 @@ void PID_Safety_Check(void);
  * @brief 飞行模式状态机
  * @param exp_thr 期望油门
  *
- * 状态转换（参考学长 Judge_FlyMode）：
+ * 状态转换：
  *   STOP → HOVER: exp_thr > THR_ARM
  *   HOVER → UP: exp_thr > 1650
  *   HOVER → DOWN: exp_thr < THR_ARM

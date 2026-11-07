@@ -105,7 +105,7 @@ void PID_Init(void)
     expectation.thr   = PWM_IDLE;
 
     /* 步骤 3：初始化飞行模式为 STOP */
-    fly_mode = FLY_MODE_STOP;
+    fly_mode = STOP;
 
     /* 步骤 4：初始化电机输出为怠速 */
     motor_out.motor1 = PWM_IDLE;
@@ -496,11 +496,11 @@ void PID_FlyMode_Update(float exp_thr)
     /* 飞行模式状态机
      *
      * 状态转换（参考学长 Judge_FlyMode）：
-     *   STOP → HOVER: exp_thr > THR_ARM
+     *   STOP → HOVER: exp_thr > THR_ARM_START
      *   HOVER → UP: exp_thr > 1650
-     *   HOVER → DOWN: exp_thr < THR_ARM
-     *   DOWN → STOP: exp_thr < THR_DISARM
-     *   DOWN → HOVER: exp_thr > THR_ARM
+     *   HOVER → DOWN: exp_thr < THR_ARM_START
+     *   DOWN → STOP: exp_thr < THR_DISARM_FINI
+     *   DOWN → HOVER: exp_thr > THR_ARM_START
      *   UP → HOVER: exp_thr < 1650
      *
      * 步骤：
@@ -510,40 +510,40 @@ void PID_FlyMode_Update(float exp_thr)
      */
 
     switch (fly_mode) {
-    case FLY_MODE_STOP:
-        if (exp_thr > THR_ARM) {
-            fly_mode = FLY_MODE_HOVER;
+    case STOP:
+        if (exp_thr > THR_ARM_START) {
+            fly_mode = HOVER;
             armed = 1;
         }
         break;
 
-    case FLY_MODE_HOVER:
+    case HOVER:
         if (exp_thr > 1650.0f) {
-            fly_mode = FLY_MODE_UP;
+            fly_mode = UP;
         }
-        if (exp_thr < THR_ARM) {
-            fly_mode = FLY_MODE_DOWN;
+        if (exp_thr < THR_ARM_START) {
+            fly_mode = DOWN;
         }
         break;
 
-    case FLY_MODE_DOWN:
-        if (exp_thr > THR_ARM) {
-            fly_mode = FLY_MODE_HOVER;
+    case DOWN:
+        if (exp_thr > THR_ARM_START) {
+            fly_mode = HOVER;
         }
-        if (exp_thr < THR_DISARM) {
-            fly_mode = FLY_MODE_STOP;
+        if (exp_thr < THR_DISARM_FINI) {
+            fly_mode = STOP;
             armed = 0;
         }
         break;
 
-    case FLY_MODE_UP:
+    case UP:
         if (exp_thr < 1650.0f) {
-            fly_mode = FLY_MODE_HOVER;
+            fly_mode = HOVER;
         }
         break;
 
     default:
-        fly_mode = FLY_MODE_STOP;
+        fly_mode = STOP;
         armed = 0;
         break;
     }

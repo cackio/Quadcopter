@@ -2,6 +2,13 @@
  * @file pid_m.c
  * @brief PID算法实现
  * 
+ * 目前已完成的功能：
+ *      遥控器期望值映射为目标角度
+ *      串级PID控制
+ *      四电机混控输出
+ *      安全保护
+ *      飞行模式状态机
+ * 
  */
 
 #include "pid.h"
@@ -24,10 +31,10 @@ PID_t          yaw_core   = {0, 0, 0, YAW_CORE_KP, 0, YAW_CORE_TD, 0};
 PID_t          thr_shell  = {0, 0, 0, THR_SHELL_KP, 0, THR_SHELL_TD, 0};
 
 Expectation_t  expectation = {0, 0, 0, PWM_IDLE};
-FlyMode_t      fly_mode    = FLY_MODE_STOP;
+FlyMode_t      fly_mode    = STOP; 
 MotorOutput_t  motor_out   = {PWM_IDLE, PWM_IDLE, PWM_IDLE, PWM_IDLE};
 float          dt           = PID_DT_NOMINAL;       // 默认是标称周期，正常时由PID_Get_Time测出来并赋值，异常时可以用这个兜底
-uint8_t        armed        = 0;
+uint8_t        armed        = 0;     // 重要标志，锁定电机输出为0，防止上电/校准/异常时电机转动
 
 
 /** 
@@ -82,11 +89,18 @@ void PID_Init(void){
     expectation.thr   = PWM_IDLE;       // 期望怠速
 
     /* 3. 初始化飞行模式为 STOP */
+    fly_mode = STOP;
 
     /* 4. 初始化电机输出为怠速 */
+    motor_out.motor1 = PWM_IDLE;
+    motor_out.motor2 = PWM_IDLE;
+    motor_out.motor3 = PWM_IDLE;
+    motor_out.motor4 = PWM_IDLE;
 
     /* 5. 初始化解锁标志为 0 */
+    armed = 0;
 
+    PID_Reset_All();
 
 }
 
@@ -112,7 +126,7 @@ float PID_Get_Time(void){
      * 读TIM4计数差值，返回格式秒
      */
     float temp = 0.0f;
-    static uint32_t now_time = 0;
+    uint32_t now_time = 0;
 
     // now_time读取当前时间，转换为秒给temp输出。同时把TIM4计数清零。
     // 公式：dt = CNT / 1000000.0f (s)
@@ -156,8 +170,9 @@ void PID_PPM_to_Exp_Calc(void){
     /* 这里先做归一化，然后转换成期望单位。方便之后改动。 */
     float exp_roll = PID_To1(ppm_roll, 1000, 2000, -1, 1);
     float exp_pitch = PID_To1(ppm_pitch, 1000, 2000, -1, 1);
-    float exp_thr = PID_To1(ppm_thr, 1000, 2000, 0, 1);
     float exp_yaw = PID_To1(ppm_yaw, 1000, 2000, -1, 1);
+    //float exp_thr = PID_To1(ppm_thr, 1000, 2000, 0, 1);     // 油门暂时不用归一化
+    float exp_thr = ppm_thr;
 
     expectation.roll = PID_To1(exp_roll, -1, 1, -EXP_ROLL_MAX, EXP_ROLL_MAX);
     expectation.pitch = PID_To1(exp_pitch, -1, 1, -EXP_PITCH_MAX, EXP_PITCH_MAX);
@@ -195,7 +210,7 @@ float PID_Cascade_Calc(float shell_err, float core_w_last, PID_t *shell, PID_t *
 
     float Kp_shell = shell->Kp;
     float Kp_core = core->Kp;
-    float Ki_core = (core->Ti=0) ?  0.0f : (dt / core->Ti);
+    float Ki_core = (core->Ti==0) ?  0.0f : (dt / core->Ti);
     float Kd_core = core->Td / dt;
 
     /* 1. 计算外环角度误差 e_angle = shell_err */
@@ -419,6 +434,56 @@ void PID_Safety_Check(void){
 }
 
 void PID_FlyMode_Update(float exp_thr){
+    /**
+     * 飞行模式状态机
+     * 四种状态：STOP, HOVER, UP, DOWN
+     * 状态转换：
+     *   STOP → HOVER: exp_thr > THR_ARM_START
+     *   HOVER → UP: exp_thr > 1650
+     *   HOVER → DOWN: exp_thr < THR_ARM_START
+     *   DOWN → STOP: exp_thr < THR_DISARM_FINI
+     *   DOWN → HOVER: exp_thr > THR_ARM_START
+     *   UP → HOVER: exp_thr < 1650
+     */
+
+    switch(fly_mode){
+        case STOP:
+            if(exp_thr >= THR_ARM_START){
+                fly_mode = HOVER;
+                armed = 1;
+            }
+            break;
+
+        case HOVER:
+            if(exp_thr > THR_HOVER_to_UP){
+                fly_mode = UP;
+            }
+            if(exp_thr < THR_HOVER_to_DOWN){
+                fly_mode = DOWN;
+            }
+            break;
+
+        case UP:
+            if(exp_thr <= THR_HOVER_to_UP){
+                fly_mode = HOVER;
+            }
+            break;
+
+        case DOWN:
+            if(exp_thr >= THR_HOVER_to_DOWN){
+                fly_mode = HOVER;
+            }
+            if(exp_thr < THR_DISARM_FINI){
+                fly_mode = STOP;
+                armed = 0;
+            }
+            break;
+        
+        default:
+            fly_mode = STOP;
+            armed = 0;
+            break;
+        }
 
 }
 
@@ -435,5 +500,5 @@ float PID_Limit(float value, float min, float max){
 
 float PID_To1(float value, float min_in, float max_in, float min_out, float max_out){
     /* 归一化 */
-    return ((value-min_in)/(max_in-min_in)) * ((max_out-max_in)) + min_out;
+    return ((value-min_in)/(max_in-min_in)) * ((max_out-min_out)) + min_out;
 }
