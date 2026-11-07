@@ -7,8 +7,8 @@
 #include "pid.h"
 #include "imu.h"
 #include "bsp.h"
-#include "tim.h"
-#include "ucos_ii.h"
+#include "tim.h"        // 控制电机输出
+#include "ucos_ii.h"    // 进临界区
 #include <math.h>       // 用了一个fasbf算绝对值
 
 
@@ -29,6 +29,26 @@ MotorOutput_t  motor_out   = {PWM_IDLE, PWM_IDLE, PWM_IDLE, PWM_IDLE};
 float          dt           = PID_DT_NOMINAL;       // 默认是标称周期，正常时由PID_Get_Time测出来并赋值，异常时可以用这个兜底
 uint8_t        armed        = 0;
 
+
+/** 
+ * PID历史状态清零（不动整定参数Kp/Ti/Td）
+ * 电机停转（未解锁/油门低于THR_MIN/倾角超限）时清零用。
+ * 防止停在地面时，起飞遇到积分饱和。
+ */
+static void PID_Reset_State(PID_t *p)
+{
+    p->eK     = 0.0f;
+    p->eK_1   = 0.0f;
+    p->eSum   = 0.0f;
+    p->output = 0.0f;
+}
+
+static void PID_Reset_All(void)
+{
+    PID_Reset_State(&roll_shell);  PID_Reset_State(&roll_core);
+    PID_Reset_State(&pitch_shell); PID_Reset_State(&pitch_core);
+    PID_Reset_State(&yaw_core);
+}
 
 
 /* ============================================================================
@@ -232,6 +252,11 @@ float PID_Single_Calc(float err, PID_t *pid){
 
 }
 
+
+/* ============================================================================
+ *  电机输出相关
+ * ========================================================================== */
+
 void PID_Motor_Calc(void){
     /**
      * 电机混控计算
@@ -309,14 +334,87 @@ void PID_Motor_Calc(void){
 }
 
 void PID_Motor_Output(void){
+    /**
+     * 电机PWM输出，将motor_out写入TIM3的CCR寄存器。
+     * 使用bsp.c中的Motor_SetSpeed
+     * 1. motor1 → TIM3_CH1 (PA6) 
+     * 2. motor2 → TIM3_CH2 (PA7) 
+     * 3. motor3 → TIM3_CH3 (PB0) 
+     * 4. motor4 → TIM3_CH4 (PB1)
+     */
+
+    Motor_SetSpeed(&htim3, TIM_CHANNEL_1, (uint16_t)motor_out.motor1);
+    Motor_SetSpeed(&htim3, TIM_CHANNEL_2, (uint16_t)motor_out.motor2);
+    Motor_SetSpeed(&htim3, TIM_CHANNEL_3, (uint16_t)motor_out.motor3);
+    Motor_SetSpeed(&htim3, TIM_CHANNEL_4, (uint16_t)motor_out.motor4);
 
 }
 
 void PID_Control_Update(void){
+    /* 串级 PID 唯一对外入口 */
+    /* 每个计算PID的周期，都按序调用一次 */
+    PID_PPM_to_Exp_Calc();      // 遥控器期望值计算
+    PID_FlyMode_Update(expectation.thr);    // 更新飞行模式
+    PID_Motor_Calc();           // 电机混控输出计算
+    PID_Motor_Output();         // 电机输出配置
 
 }
 
+
+/* ============================================================================
+ *  飞行状态相关
+ * ========================================================================== */
+
 void PID_Safety_Check(void){
+    /**
+     * 安全保护检查
+     * 条件：thr < THR_MIN : 停转 
+     *      |roll| > ANGLE_LIMIT_DEG : 停转 
+     *      |pitch| > ANGLE_LIMIT_DEG : 停转 
+     *      信号丢失 : 停转
+     */
+
+    /**
+     * @TODO:这个地方需要仔细想一想，油门拨杆拨到底时，是否直接让它停转？
+     *      这种设计思路的目的是：开机但没起飞时油门摇杆在最底部，此时要保持不起飞
+     *                         接收机失联时PPM捕获不到，期望值为0会直接停机，防止乱飞
+     *                         落地时收油，armed归零，积分清零
+     *      问题是在空中误触时风险非常大，需要把油门推回重新解锁的门槛，瞬间加速比较危险
+     *      目前初步想的两种改进方法：
+     *          1.独立解锁开关，用CH5拨杆控制armed，油门只负责推力。
+     *            油门见底只是推力最小，不会停机。但需要接收机多一个通道改状态机
+     *          2.保留一个怠速下限，最低油门时仍有输出。但是需要额外判断它是否在空中，因为在地面时不能让它飞
+     */
+    if (expectation.thr < THR_MIN) {    // 摇杆在底部附近停转
+        motor_out.motor1 = PWM_IDLE;
+        motor_out.motor2 = PWM_IDLE;
+        motor_out.motor3 = PWM_IDLE;
+        motor_out.motor4 = PWM_IDLE;
+        armed = 0;
+        PID_Reset_All();
+        return;
+    }
+
+    // /* 这里是倾斜角超过最大限幅后紧急停机，前期调试的时候感觉可以不用。 */
+    // float roll_deg = euler_angle.roll * RAD_TO_DEG;
+    // float pitch_deg = euler_angle.pitch * RAD_TO_DEG;
+    // if (fabsf(roll_deg) > ANGLE_LIMIT_DEG || fabsf(pitch_deg) > ANGLE_LIMIT_DEG) {
+    //     motor_out.motor1 = PWM_IDLE;
+    //     motor_out.motor2 = PWM_IDLE;
+    //     motor_out.motor3 = PWM_IDLE;
+    //     motor_out.motor4 = PWM_IDLE;
+    //     armed = 0;
+    //     PID_Reset_All();
+    //     return;
+    // }
+
+    if (!armed) {           // arm标志为0未解锁，电机不转
+        motor_out.motor1 = PWM_IDLE;
+        motor_out.motor2 = PWM_IDLE;
+        motor_out.motor3 = PWM_IDLE;
+        motor_out.motor4 = PWM_IDLE;
+        PID_Reset_All();    // 解锁前始终保持积分器为0 
+    }
 
 }
 

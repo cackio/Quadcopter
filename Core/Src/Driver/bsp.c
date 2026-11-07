@@ -290,6 +290,12 @@ void MS5611_Read_Raw(void)
   * @param  Channel: 定时器通道
   * @param  speed: 速度值，范围0-ARR值 (ARR是自动重载值)
   * @retval None
+  * 
+  * 调用__HAL_TIM_SET_COMPARE，
+  * 把 speed 写进 TIMx 某个通道的比较寄存器 CCR，，从而改变这一路 PWM 的高电平宽度（占空比）。
+  * 计数寄存器：CNT
+  * 比较寄存器：CCR（决定占空比和脉冲宽度）
+  * 自动重装寄存器：ARR（决定周期）
   */
 
 void Motor_SetSpeed(TIM_HandleTypeDef *htim, uint32_t Channel, uint16_t speed)
