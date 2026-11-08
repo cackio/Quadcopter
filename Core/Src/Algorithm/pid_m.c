@@ -199,22 +199,73 @@ void PID_PPM_to_Exp_Calc(void){
  *  PID 计算
  * ========================================================================== */
 
+void PID_Cascade_Shell_Calc_Quater(PID_t *shell){
+    /**
+     * 四元数PID外环计算
+     * 这里主要是利用四元数表示出误差，然后输给外环计算函数
+     */
+    Quaternion_t exp_q, conj_q, err_q;
+    EulerAngle_t exp_e;
+    float err_roll, err_pitch;      // 误差旋转向量的分量
+
+    /* 1. 计算目标姿态并转四元数 */
+    exp_e.roll  = expectation.roll  * DEG_TO_RAD;
+    exp_e.pitch = expectation.pitch * DEG_TO_RAD;
+    exp_e.yaw   = euler_angle.yaw;
+    IMU_Euler_To_Quaternion(&exp_e, &exp_q);
+
+    /* 2. 计算误差四元数 */
+    /**
+     * 公式：err_q =  conj(cur_q) ⊗ exp_q
+     */
+    Quaternion_t cur_q = quaternion;
+    PID_Quater_to1(&cur_q);     // 当前姿态四元数归一化
+    PID_Quater_Conj(&cur_q, &conj_q);     // 算当前姿态四元数共轭
+    PID_Quater_Mul(&conj_q, &exp_q, &err_q);    // 四元数乘法
+
+    /* 3. 最短路径：w<0 就整体取反，否则会绕 360° */
+    if (err_q.w < 0.0f) {
+        err_q.w = -err_q.w;
+        err_q.x = -err_q.x;
+        err_q.y = -err_q.y;
+        err_q.z = -err_q.z;
+    }
+
+    /* 4.计算外环输入的误差旋转向量分量  */
+    /**
+     * 一个单位四元数可以写成q = [cosθ/2, nsinθ/2] = [w, x, y, z]
+     * 其中θ为旋转角度，n为旋转轴的单位向量
+     * 小角度时，可以近似:nθ = 2q_v
+     * 左边定义成误差旋转向量，那么误差旋转向量在三个轴上的分量就是：r_x = 2q.x
+     * 拿这个误差旋转向量分量去算PID.
+     */
+    err_roll  = 2.0f * err_q.x;
+    err_pitch = 2.0f * err_q.y;
+
+    /* 5. 给外环PID计算函数算输出 */
+    /*  注意这个旋转向量的三个分量数值上都是弧度，这里需要转化成角度. */
+    exp_w.roll  = PID_Cascade_Shell_Calc(err_roll * RAD_TO_DEG, shell);
+    exp_w.pitch = PID_Cascade_Shell_Calc(err_pitch * RAD_TO_DEG, shell);
+    exp_w.yaw   = expectation.yaw;
+
+}
+
 float PID_Cascade_Shell_Calc(float shell_err, PID_t *shell){
 
     /**
      * 外环PID计算（Roll/Pitch）
      *
      * 公式：
-     *   外环：ω_exp = Kp_shell · e_angle
-     * 单位：e_angle 为度。
+     *   外环：ω_exp = Kp_shell · err
+     *
      * 
      */
 
     float Kp_shell = shell->Kp;
 
-    /* 1. 计算外环角度误差 e_angle = shell_err */
+    /* 1. 计算外环输入误差 err = shell_err */
     shell->eK = shell_err;
-    /* 2. 外环纯P输出目标角速度 = Kp*e_angle */
+    /* 2. 外环纯P输出目标角速度 = Kp*err */
     shell->output = Kp_shell * shell->eK;
     shell->eK_1 = shell->eK;         // 把这次的记成上一次的误差
 
@@ -391,9 +442,9 @@ void PID_Motor_Calc(void){
      * 实机若发现某个轴"越修正越偏"，就是这里的符号取反了，改一行即可。
      * @todo:此处有严重问题。待修改为四元数。
      */
-    float roll_deg = euler_angle.roll * RAD_TO_DEG;
-    float pitch_deg = euler_angle.pitch * RAD_TO_DEG;
-    float yaw_deg = euler_angle.yaw * RAD_TO_DEG;
+    // float roll_deg = euler_angle.roll * RAD_TO_DEG;
+    // float pitch_deg = euler_angle.pitch * RAD_TO_DEG;
+    // float yaw_deg = euler_angle.yaw * RAD_TO_DEG;
     float roll_rate = gyro_body.x * RAD_TO_DEG;
     float pitch_rate = gyro_body.y * RAD_TO_DEG;
     float yaw_rate = gyro_body.z * RAD_TO_DEG;
@@ -603,4 +654,31 @@ float PID_Limit(float value, float min, float max){
 float PID_To1(float value, float min_in, float max_in, float min_out, float max_out){
     /* 归一化 */
     return ((value-min_in)/(max_in-min_in)) * ((max_out-min_out)) + min_out;
+}
+
+void PID_Quater_Mul(Quaternion_t *a, Quaternion_t *b, Quaternion_t *c){
+    /* 四元数乘法运算 */
+    float w = a->w*b->w - a->x*b->x - a->y*b->y - a->z*b->z;
+    float x = a->w*b->x + a->x*b->w + a->y*b->z - a->z*b->y;
+    float y = a->w*b->y - a->x*b->z + a->y*b->w + a->z*b->x;
+    float z = a->w*b->z + a->x*b->y - a->y*b->x + a->z*b->w;
+    c->w = w; c->x = x; c->y = y; c->z = z;
+}
+
+void PID_Quater_to1(Quaternion_t *q){
+    /* 四元数归一化 */
+    float norm = sqrtf(q->w * q->w + q->x * q->x + q->y * q->y + q->z * q->z);
+    if (norm < 1e-6f) { q->w=1; q->x=q->y=q->z=0; return; }
+    q->w /= norm;
+    q->x /= norm;
+    q->y /= norm;
+    q->z /= norm;
+}
+
+void PID_Quater_Conj(Quaternion_t *q, Quaternion_t *conj){
+    /* 四元数共轭运算 */
+    conj->w = q->w;
+    conj->x = -q->x;
+    conj->y = -q->y;
+    conj->z = -q->z;
 }

@@ -16,16 +16,12 @@
  *    4. 安全保护（倾斜角保护、信号丢失保护）
  *    5. 飞行模式状态机（起飞/悬停/降落）
  *
- *  参考笔记：
- *    - PID.md (PID 控制算法、串级 PID)
- *    - C3 四轴飞行器运动机制与模型（控制力矩映射矩阵）
  *
- *  参考代码：
- *    - examplezong/pid.h / pid.c (学长串级 PID 实现)
  *
  * ========================================================================== */
 
 #include "main.h"
+#include "imu.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -221,6 +217,13 @@ void PID_PPM_to_Exp_Calc(void);
  *  PID 计算
  * ========================================================================== */
 
+/**
+ * @brief 四元数PID外环计算
+ * @param exp_e 期望值（弧度）
+ * @param shell 外环 PID
+ * @return 外环输出目标角速度
+ */
+void PID_Cascade_Shell_Calc_Quater(PID_t *shell);
 
  /**
  * @brief 外环PID计算（Roll/Pitch）
@@ -382,6 +385,27 @@ float PID_Limit(float value, float min, float max);
  * @return 归一化后的值
  */
 float PID_To1(float value, float min_in, float max_in, float min_out, float max_out);
+
+/**
+ * @brief 四元数乘法运算
+ * @param a 第一个乘数
+ * @param b 第二个乘数
+ * @param c 输出结果
+ */
+void PID_Quater_Mul(Quaternion_t *a, Quaternion_t *b, Quaternion_t *c);
+
+/**
+ * @brief 四元数归一化
+ * @param q 输入四元数
+ */
+void PID_Quater_to1(Quaternion_t *q);
+
+/**
+ * @brief 四元数共轭运算
+ * @param q 输入四元数
+ * @param conj 输出共轭四元数
+ */
+void PID_Quater_Conj(Quaternion_t *q, Quaternion_t *conj);
 
 #ifdef __cplusplus
 }
