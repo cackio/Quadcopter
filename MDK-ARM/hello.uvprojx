@@ -431,9 +431,9 @@
               <FilePath>../Core/Inc/Algorithm/altitude.h</FilePath>
             </File>
             <File>
-              <FileName>pid.c</FileName>
+              <FileName>pid_m.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Core/Src/Algorithm/pid.c</FilePath>
+              <FilePath>../Core/Src/Algorithm/pid_m.c</FilePath>
             </File>
             <File>
               <FileName>pid.h</FileName>

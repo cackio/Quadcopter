@@ -3,7 +3,7 @@
 "hello\main.o"
 "hello\imu.o"
 "hello\altitude.o"
-"hello\pid.o"
+"hello\pid_m.o"
 "hello\gpio.o"
 "hello\i2c.o"
 "hello\tim.o"

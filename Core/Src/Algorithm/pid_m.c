@@ -51,10 +51,17 @@ static void PID_Reset_State(PID_t *p)
     p->output = 0.0f;
 }
 
-static void PID_Reset_All(void)
+static void PID_Reset_Shell(void)
 {
-    PID_Reset_State(&roll_shell);  PID_Reset_State(&roll_core);
-    PID_Reset_State(&pitch_shell); PID_Reset_State(&pitch_core);
+    PID_Reset_State(&roll_shell);  
+    PID_Reset_State(&pitch_shell); 
+
+}
+
+static void PID_Reset_Core(void)
+{
+    PID_Reset_State(&roll_core);
+    PID_Reset_State(&pitch_core);
     PID_Reset_State(&yaw_core);
 }
 
@@ -88,6 +95,9 @@ void PID_Init(void){
     expectation.pitch = 0.0f;
     expectation.yaw   = 0.0f;
     expectation.thr   = PWM_IDLE;       // 期望怠速
+    exp_w.roll        = 0.0f;
+    exp_w.pitch       = 0.0f;
+    exp_w.yaw         = 0.0f;
 
     /* 3. 初始化飞行模式为 STOP */
     fly_mode = STOP;
@@ -101,7 +111,8 @@ void PID_Init(void){
     /* 5. 初始化解锁标志为 0 */
     armed = 0;
 
-    PID_Reset_All();
+    PID_Reset_Shell();
+    PID_Reset_Core();
 
 }
 
@@ -152,7 +163,7 @@ void PID_PPM_to_Exp_Calc(void){
 
     uint16_t ppm_roll, ppm_pitch, ppm_yaw, ppm_thr;
 
-    /* 1. 读取 PPM_Values（关中断保护） */
+    /* 1. 读取 PPM_Values（关中断保护，防止读的时候摇杆继续动传来中断打断） */
     OS_CPU_SR cpu_sr = 0;
     OS_ENTER_CRITICAL();
     ppm_roll = PPM_Values[PPM_CH_ROLL];
@@ -357,6 +368,7 @@ void PID_Motor_Calc(void){
      *       motor4 = thr + pitch - roll - yaw
      */
 
+    /* 这里只在内环用I和D，所以只在内环用dt。如果外环也引入ID，那需要维护多个dt */
     dt = PID_Get_Time();
     if ((dt <= 0.0005f) || (dt > PID_DT_MAX)){
         /* 首次调用、被高优先级任务打断很久、或TIM4计数器回绕时dt很大，
@@ -386,11 +398,9 @@ void PID_Motor_Calc(void){
     float pitch_rate = gyro_body.y * RAD_TO_DEG;
     float yaw_rate = gyro_body.z * RAD_TO_DEG;
 
-    /* 2. 计算 Roll/Pitch/Yaw PID 输出 */
-    float e_roll = expectation.roll - roll_deg;
-    float e_pitch = expectation.pitch - pitch_deg;
-    float M_roll = PID_Cascade_Calc(e_roll, roll_rate, &roll_shell, &roll_core);
-    float M_pitch = PID_Cascade_Calc(e_pitch, pitch_rate, &pitch_shell, &pitch_core);
+    /* 2. 计算 Roll/Pitch/Yaw PID 内环输出 */
+    float M_roll = PID_Cascade_Core_Calc(exp_w.roll, roll_rate, &roll_core);
+    float M_pitch = PID_Cascade_Core_Calc(exp_w.pitch, pitch_rate, &pitch_core);
 
     float e_yaw_rate = expectation.yaw - yaw_rate;
     float M_yaw = PID_Single_Calc(e_yaw_rate, &yaw_core);
@@ -464,6 +474,17 @@ void PID_Safety_Check(void){
      *      信号丢失 : 停转
      */
 
+     /* 姿态校准完成前禁止输出油门，防止校准过程中误转电机 */
+    if (!IMU_Calib_Done())
+    {
+        motor_out.motor1 = PWM_IDLE;
+        motor_out.motor2 = PWM_IDLE;
+        motor_out.motor3 = PWM_IDLE;
+        motor_out.motor4 = PWM_IDLE;
+        PID_Reset_Core();
+        return;
+    }
+
     /**
      * @TODO:这个地方需要仔细想一想，油门拨杆拨到底时，是否直接让它停转？
      *      这种设计思路的目的是：开机但没起飞时油门摇杆在最底部，此时要保持不起飞
@@ -481,7 +502,7 @@ void PID_Safety_Check(void){
         motor_out.motor3 = PWM_IDLE;
         motor_out.motor4 = PWM_IDLE;
         armed = 0;
-        PID_Reset_All();
+        PID_Reset_Core();
         return;
     }
 
@@ -503,7 +524,7 @@ void PID_Safety_Check(void){
         motor_out.motor2 = PWM_IDLE;
         motor_out.motor3 = PWM_IDLE;
         motor_out.motor4 = PWM_IDLE;
-        PID_Reset_All();    // 解锁前始终保持积分器为0 
+        PID_Reset_Core();    // 解锁前始终保持积分器为0 
     }
 
 }
@@ -521,9 +542,15 @@ void PID_FlyMode_Update(float exp_thr){
      *   UP → HOVER: exp_thr < 1650
      */
 
+    /** 
+     * 为了安全，加了一个限制条件：上电后如果油门有幅度，是不允许启动的，armed=1锁定。 
+     * 只有油门推到底再启动才能解锁。
+     */ 
+    static uint8_t thr_lowest_signal = 0;   /* 上电后必须先收到底，才允许解锁 */
+    if (exp_thr < THR_MIN)  thr_lowest_signal = 1;
     switch(fly_mode){
         case STOP:
-            if(exp_thr >= THR_ARM_START){
+            if(thr_lowest_signal && exp_thr >= THR_ARM_START){
                 fly_mode = HOVER;
                 armed = 1;
             }

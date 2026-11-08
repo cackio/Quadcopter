@@ -50,7 +50,6 @@
  * 原来 256 个（1024 字节）不够用，会栈溢出 → HardFault → 板子静默不发了。
  * 这里统一放大，保证校准结束那一刻也不会溢出。 */
 #define SENSOR_TASK_STK_SIZE   512   /* 2 KB   */
-#define MOTOR_TASK_STK_SIZE    256   /* 1 KB   */
 #define UART_TASK_STK_SIZE     512   /* 2 KB，含 char data[220] 和 snprintf 的临时空间 */
 #define START_TASK_STK_SIZE    384   /* 1.5 KB，含 BSP_Init + 创建三个任务 */
 #define PIDSHELL_TASK_SIZE     256
@@ -59,13 +58,11 @@
 #define START_TASK_PRIO        5
 #define PIDSHELL_TASK_PRIO     6
 #define PIDCORE_TASK_PRIO      7
-#define SENSOR_TASK_PRIO       9
-#define MOTOR_TASK_PRIO        8
-#define UART_TASK_PRIO         10
+#define SENSOR_TASK_PRIO       8
+#define UART_TASK_PRIO         9
 
 /* 每个任务的周期（单位：tick） 当前tick为10ms */
 #define SENSOR_TASK_PERIOD    1
-#define MOTOR_TASK_PERIOD     2
 #define UART_TASK_PERIOD      5
 #define PIDSHELL_TASK_PERIOD  4
 #define PIDCORE_TASK_PERIOD   1
@@ -81,7 +78,6 @@
 /* USER CODE BEGIN PV */
 OS_STK StartTaskStk[START_TASK_STK_SIZE];
 OS_STK SensorTaskStk[SENSOR_TASK_STK_SIZE];
-OS_STK MotorTaskStk[MOTOR_TASK_STK_SIZE];
 OS_STK UartTaskStk[UART_TASK_STK_SIZE];
 OS_STK PIDShellTaskStk[PIDSHELL_TASK_SIZE];
 OS_STK PIDCoreTaskStk[PIDCORE_TASK_SIZE];
@@ -97,66 +93,6 @@ void StartTask(void *p_arg);
 /* USER CODE BEGIN 0 */
 
 
-void MotorTask(void *p_arg)
-{
-		OS_CPU_SR cpu_sr = 0;
-    uint16_t throttle_input;
-
-    (void)p_arg;
-
-    while (1)
-    {
-        /*
-         * T8FB 一般通道 3 是油门，对应数组下标 2
-         * 为了防止中断正在改 PPM_Values，这里关中断短暂读取。
-         */
-        OS_ENTER_CRITICAL();
-        throttle_input = PPM_Values[2];
-        OS_EXIT_CRITICAL();
-
-        /*
-         * 信号异常保护
-         */
-        if (throttle_input < 900 || throttle_input > 2200)
-        {
-            throttle_input = 1000;
-        }
-
-        /*
-         * 姿态校准完成前禁止输出油门，防止校准过程中误转电机。
-         */
-        if (!IMU_Calib_Done())
-        {
-            throttle_input = 1000;
-        }
-
-        /*
-         * 四路电机同步油门
-         */
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_1, (uint16_t)PWM_IDLE);
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_2, (uint16_t)PWM_IDLE);
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_3, (uint16_t)PWM_IDLE);
-        Motor_SetSpeed(&htim3, TIM_CHANNEL_4, (uint16_t)PWM_IDLE);
-
-        OSTimeDlyHMSM(0, 0, 0, 20);
-        continue;
-      
-
-      /*
-        * 串级 PID 主流程（外环角度环 + 内环角速度环都在这一个任务里）：
-        *   1. PID_Exp_Calc      PPM → 期望角度(°)/期望角速度(°·s⁻¹)/油门
-        *   2. PID_FlyMode_Update 油门 > 1350 才 armed=1
-        *   3. PID_Motor_Calc    Roll/Pitch 串级 + Yaw 单环，共用同一个 Δt
-        *   4. PID_Motor_Output  混控结果写进 TIM3 四路 CCR
-        *
-        * 控制周期 20ms（50Hz），和 PID_Get_Time() 实测的 Δt 一致。
-        * 先暂时把PID放这里，之后会把PID做成单独的任务独立出来。
-        */
-      PID_Control_Update();
-
-      OSTimeDly(MOTOR_TASK_PERIOD);
-    }
-}
 void SensorTask(void *p_arg)
 {
     static uint8_t ms_div = 0;
@@ -527,11 +463,6 @@ void StartTask(void *p_arg)
     OS_TRACE_INIT();
 
     /* 3. 创建子任务 */
-    os_err = OSTaskCreate(MotorTask,
-                          (void *)0,
-                          &MotorTaskStk[MOTOR_TASK_STK_SIZE - 1],
-                          MOTOR_TASK_PRIO);
-    OSTaskNameSet(MOTOR_TASK_PRIO, (INT8U *)"Motor Task", &os_err);
 
     os_err = OSTaskCreate(SensorTask,
                           (void *)0,
