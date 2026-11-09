@@ -1,24 +1,6 @@
 #ifndef __PID_H
 #define __PID_H
 
-/* ============================================================================
- *  pid.h — 串级 PID 控制与电机混控模块头文件
- *
- *  依赖：
- *    - main.h (STM32 HAL 类型定义)
- *    - imu.h (姿态解算输出)
- *    - bsp.h (传感器原始数据、PPM 遥控、电机控制)
- *
- *  功能模块：
- *    1. 遥控器期望值映射（PPM → 期望 roll/pitch/yaw/thr）
- *    2. 串级 PID 控制（角度环 P + 角速度环 PID）
- *    3. 电机混控（PID 输出 → 4 路电机 PWM）
- *    4. 安全保护（倾斜角保护、信号丢失保护）
- *    5. 飞行模式状态机（起飞/悬停/降落）
- *
- *
- *
- * ========================================================================== */
 
 #include "main.h"
 #include "imu.h"
@@ -31,17 +13,9 @@ extern "C" {
  *  常量与类型定义
  * ========================================================================== */
 
-/* ---- 单位约定（整份 PID 模块统一用这一套，避免"度/弧度"混算） ----
- *   角度       : 度 (°)          —— 由 euler_angle(rad) × RAD_TO_DEG 得到
- *   角速度     : 度/秒 (°/s)      —— 由 gyro_body(rad/s) × RAD_TO_DEG 得到
- *   PID 输出   : PWM 增量         —— 直接叠加到 1000~2000 的油门刻度上
- *   采样周期   : 秒 (s)           —— 由 TIM4 实测（标称 20ms）
- *
- * 为什么用度而不是弧度：默认增益（外环 4.4 / 内环 2.6）是按度整定的，
- * 若把弧度直接喂进 PID，数值会小 57 倍，输出几乎推不动电机。
- */
+#define PID_SHELL_MODE  1       /* PID外环计算模式，1为四元数，0为姿态角*/
 
-/* PID 输出限幅：单轴最多给油门叠加 ±500 */
+/* PID 输出限幅 */
 #define PID_OUT_MAX      500.0f    /* PID 输出最大值 */
 #define PID_OUT_MIN     -500.0f    /* PID 输出最小值 */
 #define PWM_OUT_MAX      2000.0f   /* 电机 PWM 最大值 */
@@ -49,11 +23,11 @@ extern "C" {
 #define PWM_IDLE         1000.0f   /* 怠速 PWM */
 
 /* 内环积分处理 */
-#define CORE_INT_MAX     150.0f    /* 积分项最大"贡献"（PWM 单位，不是 eSum 本身） */
-#define CORE_INT_SEP      20.0f    /* 积分分离阈值：|e_rate| > 20°/s 时不积分 */
+#define CORE_INT_MAX     150.0f    /* 积分项最大贡献值，用抗积分饱和 */
+#define CORE_INT_SEP      20.0f    /* 积分分离的角速度阈值 */
 
-/* 采样周期保护：TIM4 实测值离谱时退回标称值，防止 Ki/Kd 被算成荒谬的系数 */
-#define PID_DT_NOMINAL    0.02f    /* 标称周期 20ms（与 MotorTask 周期一致） */
+/* 采样周期保护 */
+#define PID_DT_NOMINAL    0.01f    /* 标称周期 */
 #define PID_DT_MAX        0.10f    /* 超过 100ms 视为无效读数 */
 
 /* 安全保护阈值 */
@@ -122,8 +96,7 @@ typedef struct
     float motor4;   /* 右后 */
 } MotorOutput_t;
 
-/* 期望值结构体
- * 注意：这里统一用"度"而不是弧度，和 PID 内部单位保持一致。 */
+/* 期望值结构体 */
 typedef struct
 {
     float roll;       /* 期望横滚角 (°) */
@@ -202,14 +175,14 @@ float PID_Get_Time(void);
 /**
  * @brief 遥控器期望值计算
  *
- * 将 PPM_Values 映射为期望姿态和油门。
+ * 将全局变量PPM_Values映射为期望姿态和油门。
  * 得到的结果输出在全局变量expectation中（包括roll, pitch, yaw, thr）
  *
  *
  * 步骤：
  *   1. 读取 PPM_Values（关中断保护）
  *   2. 限幅到有效范围
- *   3. 转换为期望值（度 / 度每秒，全程不转弧度）
+ *   3. 转换为期望值（度 / 度每秒）
  */
 void PID_PPM_to_Exp_Calc(void);
 
@@ -219,11 +192,13 @@ void PID_PPM_to_Exp_Calc(void);
 
 /**
  * @brief 四元数PID外环计算
- * @param exp_e 期望值（弧度）
- * @param shell 外环 PID
- * @return 外环输出目标角速度
+ * @note  输出通过全局变量exp_w返回（roll/pitch/yaw 目标角速度）
+ * 
+ * 全局变量expectation输入期望值并转换为期望四元数，
+ * 全局变量quaternion输入测得的当前姿态四元数，
+ * 计算误差四元数后转三个自由度的旋转向量，输入外环PID计算函数
  */
-void PID_Cascade_Shell_Calc_Quater(PID_t *shell);
+void PID_Cascade_Shell_Calc_Quater(void);
 
  /**
  * @brief 外环PID计算（Roll/Pitch）

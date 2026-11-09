@@ -199,7 +199,7 @@ void PID_PPM_to_Exp_Calc(void){
  *  PID 计算
  * ========================================================================== */
 
-void PID_Cascade_Shell_Calc_Quater(PID_t *shell){
+void PID_Cascade_Shell_Calc_Quater(void){
     /**
      * 四元数PID外环计算
      * 这里主要是利用四元数表示出误差，然后输给外环计算函数
@@ -244,8 +244,8 @@ void PID_Cascade_Shell_Calc_Quater(PID_t *shell){
 
     /* 5. 给外环PID计算函数算输出 */
     /*  注意这个旋转向量的三个分量数值上都是弧度，这里需要转化成角度. */
-    exp_w.roll  = PID_Cascade_Shell_Calc(err_roll * RAD_TO_DEG, shell);
-    exp_w.pitch = PID_Cascade_Shell_Calc(err_pitch * RAD_TO_DEG, shell);
+    exp_w.roll  = PID_Cascade_Shell_Calc(err_roll * RAD_TO_DEG, &roll_shell);
+    exp_w.pitch = PID_Cascade_Shell_Calc(err_pitch * RAD_TO_DEG, &pitch_shell);
     exp_w.yaw   = expectation.yaw;
 
 }

@@ -284,7 +284,15 @@ void PIDShellTask(void *p_arg){
 
       PID_PPM_to_Exp_Calc();      // 遥控器期望值计算
       PID_FlyMode_Update(expectation.thr);    // 更新飞行模式.油门期望值只在外环监测期望值后发生变化，所以只在这里用就行
-      PID_Cascade_Shell_Calc_Quater(&roll_shell);  //外环计算通过修改全局变量exp_w角速度期望值输出
+      if(PID_SHELL_MODE){
+          /* 通过四元数计算 */
+          PID_Cascade_Shell_Calc_Quater();  //外环计算通过修改全局变量exp_w角速度期望值输出
+      }else{
+          /* 通过姿态角计算 */
+          exp_w.roll  = PID_Cascade_Shell_Calc(expectation.roll  - euler_angle.roll  * RAD_TO_DEG, &roll_shell);
+          exp_w.pitch = PID_Cascade_Shell_Calc(expectation.pitch - euler_angle.pitch * RAD_TO_DEG, &pitch_shell);
+      }
+      
 
       OSTimeDly(PIDSHELL_TASK_PERIOD);
     }
