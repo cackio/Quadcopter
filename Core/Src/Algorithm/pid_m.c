@@ -188,7 +188,9 @@ void PID_PPM_to_Exp_Calc(void){
 
     expectation.roll = PID_To1(exp_roll, -1, 1, -EXP_ROLL_MAX, EXP_ROLL_MAX);
     expectation.pitch = PID_To1(exp_pitch, -1, 1, -EXP_PITCH_MAX, EXP_PITCH_MAX);
-    expectation.yaw = PID_To1(exp_yaw, -1, 1, -EXP_YAW_RATE_MAX, EXP_YAW_RATE_MAX);
+    /* 偏航取反：遥控器左拨(PPM=1000) → 期望角速度为正 → 机头左转。
+     * 正方向与 gyro_body.z 一致（右手定则，从机顶俯视逆时针）。*/
+    expectation.yaw = -PID_To1(exp_yaw, -1, 1, -EXP_YAW_RATE_MAX, EXP_YAW_RATE_MAX);
     expectation.thr = exp_thr;
     /* 这里用了归一化就不用再限幅了 */
 
@@ -440,7 +442,6 @@ void PID_Motor_Calc(void){
      *     ψ̇ ≈ ω_z = gyro_body.z
      *   （小角度下三个欧拉角速度就近似等于机体角速度的三个分量。）
      * 实机若发现某个轴"越修正越偏"，就是这里的符号取反了，改一行即可。
-     * @todo:此处有严重问题。待修改为四元数。
      */
     // float roll_deg = euler_angle.roll * RAD_TO_DEG;
     // float pitch_deg = euler_angle.pitch * RAD_TO_DEG;
@@ -458,25 +459,25 @@ void PID_Motor_Calc(void){
 
     /* 3. 按混控公式计算4路电机 */
     /**
-     * 电机布局：1=左前  2=右前  3=左后  4=右后
+     * 电机布局：1=左前  2=右前  3=左后  4=右后。13正桨，24反桨。
      * 符号前提：
      *   roll > 0  = 左侧抬起 / 右侧下沉
      *   pitch > 0 = 机头下沉（低头）
      *   yaw  > 0  = 从机顶俯视逆时针（机头左转）
      * 于是各轴 PID 输出的物理含义是：
-     *   pid_pitch > 0 → 前电机减速、后电机加速 → 机头下沉
-     *   pid_roll  > 0 → 左电机加速、右电机减速 → 左侧抬起
-     *   pid_yaw   > 0 → 1、4 减速、2、3 加速 → 对角差动
-     * 注意：yaw 的正负与电机转向（正反桨）有关，首飞前务必核对螺旋桨转向。
-     * @todo:研究具体分配
+     *   M_roll  > 0 → 左侧(1,4)加速、右侧(2,3)减速 → 左侧抬起
+     *   M_pitch > 0 → 前侧(1,2)减速、后侧(3,4)加速 → 机头下沉
+     *   M_yaw   > 0 → 1、3 加速、2、4 减速 → 机头左转
+     *                （前提：1、3 为正桨顺时针转，2、4 为反桨逆时针转，
+     *                  加速顺时针桨会反作用于机身一个逆时针力矩）
      */
-    motor_out.motor1 = PID_Limit(expectation.thr - M_pitch + M_roll - M_yaw,
+    motor_out.motor1 = PID_Limit(expectation.thr - M_pitch + M_roll + M_yaw,
                                  PWM_OUT_MIN, PWM_OUT_MAX);
-    motor_out.motor2 = PID_Limit(expectation.thr - M_pitch - M_roll + M_yaw,
+    motor_out.motor2 = PID_Limit(expectation.thr - M_pitch - M_roll - M_yaw,
                                  PWM_OUT_MIN, PWM_OUT_MAX);
-    motor_out.motor3 = PID_Limit(expectation.thr + M_pitch + M_roll + M_yaw,
+    motor_out.motor3 = PID_Limit(expectation.thr + M_pitch - M_roll + M_yaw,
                                  PWM_OUT_MIN, PWM_OUT_MAX);
-    motor_out.motor4 = PID_Limit(expectation.thr + M_pitch - M_roll - M_yaw,
+    motor_out.motor4 = PID_Limit(expectation.thr + M_pitch + M_roll - M_yaw,
                                  PWM_OUT_MIN, PWM_OUT_MAX);
 
     /* 4. 安全保护检查（未解锁/倾角超限时会把上面算出的值全部改回怠速） */
@@ -501,15 +502,15 @@ void PID_Motor_Output(void){
 
 }
 
-void PID_Control_Update(void){
-    /* 串级 PID 唯一对外入口 */
-    /* 每个计算PID的周期，都按序调用一次 */
-    PID_PPM_to_Exp_Calc();      // 遥控器期望值计算
-    PID_FlyMode_Update(expectation.thr);    // 更新飞行模式
-    PID_Motor_Calc();           // 电机混控输出计算
-    PID_Motor_Output();         // 电机输出配置
+// void PID_Control_Update(void){
+//     /* 串级 PID 唯一对外入口 */
+//     /* 每个计算PID的周期，都按序调用一次 */
+//     PID_PPM_to_Exp_Calc();      // 遥控器期望值计算
+//     PID_FlyMode_Update(expectation.thr);    // 更新飞行模式
+//     PID_Motor_Calc();           // 电机混控输出计算
+//     PID_Motor_Output();         // 电机输出配置
 
-}
+// }
 
 
 /* ============================================================================

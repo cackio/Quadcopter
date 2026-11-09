@@ -271,8 +271,14 @@ float PID_Single_Calc(float err, PID_t *pid);
  * @brief 电机混控计算
  *
  * 将 PID 输出映射到 4 路电机 PWM。
+ * 
+ * 电机布局：顺时针编号。 1=左前  2=右前  3=左后  4=右后。13正桨，24反桨。
+ * 符号前提：
+ *   roll > 0  = 左侧抬起 / 右侧下沉
+ *   pitch > 0 = 机头下沉（低头）
+ *   yaw  > 0  = 从机顶俯视逆时针（机头左转）
  *
- * 公式（参考笔记 C3 控制力矩映射矩阵）：
+ * 公式：
  *   motor1 = thr - pitch + roll - yaw
  *   motor2 = thr - pitch - roll + yaw
  *   motor3 = thr + pitch + roll + yaw
@@ -299,13 +305,13 @@ void PID_Motor_Calc(void);
  */
 void PID_Motor_Output(void);
 
-/**
- * @brief 串级 PID 唯一对外入口（MotorTask 每 20ms 调用一次）
- *
- * 内部顺序：期望值映射 → 飞行模式/解锁 → 外环+内环 PID + 混控 → PWM 输出。
- * 外环（角度环）和内环（角速度环）都在这一次调用里、用同一个 Δt 算完。
- */
-void PID_Control_Update(void);
+// /**
+//  * @brief 串级 PID 唯一对外入口（MotorTask 每 20ms 调用一次）
+//  *
+//  * 内部顺序：期望值映射 → 飞行模式/解锁 → 外环+内环 PID + 混控 → PWM 输出。
+//  * 外环（角度环）和内环（角速度环）都在这一次调用里、用同一个 Δt 算完。
+//  */
+// void PID_Control_Update(void);
 
 /**
  * @brief 安全保护检查
