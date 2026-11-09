@@ -6,6 +6,13 @@
 
 I2C_HandleTypeDef hi2c1;
 int mock_busy;
+unsigned mock_busy_cycles, mock_stop_cycles;
+unsigned mock_busy_status(void)
+{
+    if (mock_busy) return 1;
+    if (mock_busy_cycles) { --mock_busy_cycles; return 1; }
+    return 0;
+}
 static uint8_t imu_regs[128], mag_regs[16];
 static int failed_register = -1, corrupt_register = -1;
 static uint16_t mock_imu_address = 0xD0;
@@ -17,6 +24,7 @@ void mock_reset(void)
     imu_regs[0x75] = 0x68;
     memcpy(mag_regs + 0x0A, "H43", 3);
     mock_busy = 0;
+    mock_busy_cycles = mock_stop_cycles = 0;
     failed_register = corrupt_register = -1;
     mock_reads = mock_timeout = 0;
     mock_imu_address = 0xD0;
@@ -60,6 +68,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *h, uint16_t address, uint1
         imu_regs[0x3A] = 0;
     if (address == 0x3C && reg == 0x03 && count == 6)
         mag_regs[0x09] = 0;
+    mock_busy_cycles=mock_stop_cycles;
     return HAL_OK;
 }
 HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *h, uint16_t address, uint16_t reg,
@@ -76,6 +85,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *h, uint16_t address, uint
         memcpy(mag_regs + reg, data, count);
     else
         return HAL_ERROR;
+    mock_busy_cycles=mock_stop_cycles;
     return HAL_OK;
 }
 void HAL_Delay(uint32_t milliseconds)
@@ -114,3 +124,5 @@ uint16_t test_diagnostic(uint8_t *out, size_t cap)
     s.q[0] = 1;
     return ANO_PackDiagnostic(&s, out, cap);
 }
+
+uint32_t HAL_I2C_GetError(I2C_HandleTypeDef *h) { (void)h; return 0; }

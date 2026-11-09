@@ -12,6 +12,21 @@ enum
     SENSOR_NOT_READY = 0,
     SENSOR_NEW = 1
 };
+enum
+{
+    DRIVER_NONE,
+    DRIVER_READ,
+    DRIVER_WRITE,
+    DRIVER_ID,
+    DRIVER_READBACK,
+    DRIVER_BUS_BUSY
+};
+typedef struct
+{
+    uint8_t address, id[3], stage, reg, expected, actual, status, initialized;
+    uint32_t hal_error, read_errors, overflow, not_ready, new_samples;
+} SensorDiagnostic;
+const SensorDiagnostic *Sensor_Diagnostic(unsigned sensor);
 int IMU_Init(void);
 int IMU_Read(ImuRawSample *sample);
 int Magnetometer_Init(void);

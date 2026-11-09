@@ -1,17 +1,12 @@
 #ifndef ATTITUDE_H
 #define ATTITUDE_H
+#include "cal_service.h"
 #include <stdint.h>
 typedef struct
 {
     float q[4];
     float beta;
 } AttitudeFilter;
-typedef struct
-{
-    uint32_t count;
-    float mean[6], m2[6], bias_dps[3];
-    uint8_t ready;
-} GyroCalibration;
 int Attitude_Normalize(float q[4]);
 int Attitude_MatrixValid(const float r[3][3]);
 void Attitude_Rotate(const float r[3][3], const float in[3], float out[3]);

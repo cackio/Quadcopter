@@ -6,6 +6,7 @@ STM32F401RE（84 MHz）＋μC/OS-II＋MPU6050/HMC5883L＋JDY-31-SPP。
 
 ## 先看这里
 
+- [独立传感器校准与验收](docs/传感器校准与验收.md)：烧录 `FLIGHT_APP_MODE=1` 后，由 Python 中文引导原始检查、板上统计、独立验证和烧录复查。
 - [姿态解算调试手册](docs/姿态解算调试手册.md)：从固定帧、原始数据、轴映射、六轴到磁场校准和九轴的完整步骤。
 - [软件验证记录](docs/软件验证记录.md)：编译、自动测试及尚未做的实机验证。
 - `Core/Inc/flight_config.h`：串口、算法、上报模式和增益。
@@ -18,8 +19,8 @@ STM32F401RE（84 MHz）＋μC/OS-II＋MPU6050/HMC5883L＋JDY-31-SPP。
 | MPU6050／姿态任务 | 200 Hz，TIM4 事件唤醒，优先级 7 |
 | 时间源 | TIM2 1 MHz，支持 32 位微秒回绕 |
 | 磁力计 | HMC5883L H43，30 Hz，检查新数据 |
-| 蓝牙 UART | USART1 PA9/PA10，9600 8N1 |
-| 普通上报 | 匿名 V7 欧拉角 20 Hz；115200 时欧拉角和四元数各 50 Hz |
+| 蓝牙 UART | USART1 PA9/PA10，默认 115200 8N1 |
+| 普通上报 | 默认匿名 V7 欧拉角和四元数各 50 Hz；9600 时欧拉角 20 Hz |
 | 诊断模式 | 私有二进制帧 10 Hz，电脑工具解码、保存和回放 |
 | 启动校准 | 约 1 秒预热＋5 秒静止陀螺仪校准，移动则重新累计 |
 | 初始融合 | 六轴；安装方向和磁场参数未确认，九轴不会默认启用 |
@@ -34,8 +35,8 @@ Keil 打开 `MDK-ARM/hello.uvprojx`，使用 ARMCLANG V6，F7 编译。也可在
 
 ```powershell
 python tools/build_firmware.py
-python tools/build_firmware.py --name fixed9600 --define FLIGHT_TELEMETRY_MODE=2
-python tools/build_firmware.py --name diag9600 --define FLIGHT_TELEMETRY_MODE=1
+python tools/build_firmware.py --name fixed9600 --define FLIGHT_TELEMETRY_MODE=2 --define FLIGHT_UART_BAUD=9600
+python tools/build_firmware.py --name diag9600 --define FLIGHT_TELEMETRY_MODE=1 --define FLIGHT_UART_BAUD=9600
 python tools/run_tests.py
 ```
 
@@ -45,7 +46,7 @@ python tools/run_tests.py
 
 ```powershell
 python tools/capture.py --list
-python tools/capture.py --port COM12 --seconds 150 --output captures/mag.csv
+python tools/capture.py --port COM12 --baud 115200 --seconds 150 --output captures/mag.csv
 python tools/calibrate.py mag --input captures/mag.csv
 ```
 

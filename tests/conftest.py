@@ -45,7 +45,8 @@ def native():
     else:
         command += ["-fPIC"]
     command += [str(ROOT/p) for p in ("Core/Src/attitude.c", "Core/Src/ano_protocol.c",
-                                    "Core/Src/imu_driver.c", "tests/native_bindings.c")]
+                                    "Core/Src/imu_driver.c", "Core/Src/cal_service.c", "Core/Src/cal_wire.c",
+                                    "Core/Src/sensor_data.c", "tests/native_bindings.c", "tests/app_bindings.c")]
     command += ["-lm", "-o", str(library)]
     environment = os.environ.copy()
     environment["PATH"] = str(Path(compiler).parent)+os.pathsep+environment.get("PATH", "")

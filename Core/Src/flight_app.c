@@ -3,9 +3,11 @@
 #include "ano_protocol.h"
 #include "attitude.h"
 #include "bsp.h"
+#include "cal_wire.h"
 #include "flight_config.h"
 #include "imu_driver.h"
 #include "sensor_calibration.h"
+#include "sensor_data.h"
 #include "tim.h"
 #include "timebase.h"
 #include "ucos_ii.h"
@@ -29,44 +31,25 @@ static AttitudeFilter filter;
 static GyroCalibration gyro_cal;
 static uint32_t last_sample_us, warmup_samples;
 static uint8_t imu_ok, mag_present, mag_valid, config_ok, initialized, have_time;
-static const float imu_to_body[3][3] = CAL_IMU_TO_BODY;
-static const float mag_to_body[3][3] = CAL_MAG_TO_BODY;
-static const float accel_bias[3] = CAL_ACCEL_BIAS_G, accel_scale[3] = CAL_ACCEL_SCALE;
-static const float mag_bias[3] = CAL_MAG_BIAS_RAW, mag_matrix[3][3] = CAL_MAG_MATRIX;
+static CalService calibration;
+static CalParser command_parser;
+static CalCommand command_mailbox;
+static volatile uint8_t command_pending, reply_pending;
+static uint8_t reply_frame[96], rx_ring[256], rx_byte, quiet_slot;
+static uint16_t reply_size;
+static volatile uint16_t rx_read, rx_write;
+static volatile uint32_t rx_overflow, rx_errors, rx_bytes;
+static void handle_cal_command(void);
+static void poll_commands(void);
+static void transmit_frame(uint16_t size);
 static float display_basis[4] = FLIGHT_DISPLAY_BASIS_Q;
 
 static int calibration_valid(void)
 {
-    unsigned i, j;
-    float a, b, c, d, e, f;
-    if (!isfinite(FLIGHT_BETA) || FLIGHT_BETA < 0 || !Attitude_MatrixValid(imu_to_body) ||
-        !Attitude_MatrixValid(mag_to_body) || !Attitude_Normalize(display_basis))
-        return 0;
-    for (i = 0; i < 3; ++i)
-    {
-        if (!isfinite(accel_bias[i]) || !isfinite(accel_scale[i]) || accel_scale[i] <= 0 ||
-            !isfinite(mag_bias[i]))
-            return 0;
-        for (j = 0; j < 3; ++j)
-            if (!isfinite(mag_matrix[i][j]) || fabsf(mag_matrix[i][j] - mag_matrix[j][i]) > 1.0e-5f)
-                return 0;
-    }
-    /* Positive definite soft-iron matrix: Cholesky, no absolute determinant
-     * cutoff (raw-count -> unit-field coefficients are naturally small). */
-    a = mag_matrix[0][0];
-    if (a <= 0)
-        return 0;
-    a = sqrtf(a);
-    b = mag_matrix[1][0] / a;
-    c = mag_matrix[2][0] / a;
-    d = mag_matrix[1][1] - b * b;
-    if (d <= 0)
-        return 0;
-    d = sqrtf(d);
-    e = (mag_matrix[2][1] - b * c) / d;
-    f = mag_matrix[2][2] - c * c - e * e;
-    return isfinite(f) && f > 0;
+    return isfinite(FLIGHT_BETA) && FLIGHT_BETA >= 0 && Sensor_ConfigValid() &&
+           Attitude_Normalize(display_basis);
 }
+
 void Flight_GetSnapshot(FlightSnapshot *out)
 {
     OS_CPU_SR cpu_sr = 0;
@@ -106,8 +89,10 @@ static void release(OS_EVENT *sem, volatile uint8_t *pending, int attitude)
 void Flight_TimerISR(void)
 {
     static uint16_t telemetry_divider;
-    uint16_t divisor = (FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG) ? FLIGHT_IMU_HZ / FLIGHT_DIAG_HZ
-                                                                    : FLIGHT_IMU_HZ / FLIGHT_ANO_HZ;
+    uint16_t divisor =
+        (FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL || FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG)
+            ? FLIGHT_IMU_HZ / FLIGHT_DIAG_HZ
+            : FLIGHT_IMU_HZ / FLIGHT_ANO_HZ;
     if (OSRunning != OS_TRUE || !attitude_sem || !telemetry_sem)
         return;
     release(attitude_sem, &attitude_pending, 1);
@@ -125,8 +110,7 @@ static void read_magnetometer(void)
 {
     int16_t raw[3];
     int result;
-    unsigned i, j;
-    float centered[3], corrected[3];
+
     if (!mag_present)
         return;
     result = Magnetometer_Read(raw);
@@ -145,20 +129,152 @@ static void read_magnetometer(void)
     mag_valid = 1;
     if (!config_ok)
         return;
-    for (i = 0; i < 3; ++i)
-        centered[i] = (float)raw[i] - mag_bias[i];
-    for (i = 0; i < 3; ++i)
+    Sensor_Mag(raw, working.mag_body);
+}
+static void handle_cal_command(void)
+{
+    CalCommand cmd;
+    OS_CPU_SR cpu_sr = 0;
+    uint8_t data[84];
+    float values[18];
+    unsigned i, n;
+    int reason;
+    const SensorDiagnostic *d;
+    if (!command_pending || reply_pending)
+        return;
+    OS_ENTER_CRITICAL();
+    cmd = command_mailbox;
+    command_pending = 0;
+    OS_EXIT_CRITICAL();
+    if (cmd.op == CAL_INFO)
     {
-        corrected[i] = 0;
-        for (j = 0; j < 3; ++j)
-            corrected[i] += mag_matrix[i][j] * centered[j];
+        CalWire_Header(data, &cmd, CAL_DONE, CAL_OK);
+        if (cmd.face == 0)
+        {
+            data[SCAL_INFO_OFF_APP_MODE] = FLIGHT_APP_MODE;
+            data[SCAL_INFO_OFF_IMU_OK] = imu_ok;
+            data[SCAL_INFO_OFF_MAG_PRESENT] = mag_present;
+            data[SCAL_INFO_OFF_CONFIG_OK] = config_ok;
+            ANO_Put32(data + SCAL_INFO_OFF_BAUD, FLIGHT_UART_BAUD);
+            ANO_Put32(data + SCAL_INFO_OFF_IMU_HZ, FLIGHT_IMU_HZ);
+            ANO_Put32(data + SCAL_INFO_OFF_CAL_FLAGS, CAL_ACCEL_VALID | (CAL_MAG_VALID << 1) |
+                                                          (FLIGHT_IMU_AXES_CONFIRMED << 2) |
+                                                          (FLIGHT_MAG_AXES_CONFIRMED << 3));
+            ANO_Put32(data + SCAL_INFO_OFF_IMU_ERRORS, Sensor_Diagnostic(0)->read_errors);
+            ANO_Put32(data + SCAL_INFO_OFF_MAG_ERRORS, Sensor_Diagnostic(1)->read_errors);
+            ANO_Put32(data + SCAL_INFO_OFF_RX_OVERFLOW, rx_overflow);
+            ANO_Put32(data + SCAL_INFO_OFF_BAD_COMMANDS, command_parser.bad_frames);
+            ANO_Put32(data + SCAL_INFO_OFF_RX_ERRORS, rx_errors);
+            ANO_Put32(data + SCAL_INFO_OFF_UPTIME_MS, HAL_GetTick());
+            ANO_Put32(data + SCAL_INFO_OFF_DT_TOTAL, working.dt_total);
+            ANO_Put32(data + SCAL_INFO_OFF_DT_IN_BAND, working.dt_in_band);
+            ANO_Put32(data + SCAL_INFO_OFF_EXEC_MAX_US, working.exec_max_us);
+            ANO_Put32(data + SCAL_INFO_OFF_MISSED, release_missed);
+            ANO_Put32(data + SCAL_INFO_OFF_LAST_JOB_ID, calibration.id);
+            ANO_Put32(data + SCAL_INFO_OFF_FIRMWARE_MAGIC, 0x53434131U);
+            ANO_Put32(data + SCAL_INFO_OFF_RX_BYTES, rx_bytes);
+            ANO_Put32(data + SCAL_INFO_OFF_DIAGNOSTIC_VERSION, 1);
+        }
+        else if (cmd.face == 1 || cmd.face == 2)
+        {
+            d = Sensor_Diagnostic(cmd.face - 1);
+            data[SCAL_DRIVER_OFF_ADDRESS] = d->address;
+            memcpy(data + SCAL_DRIVER_OFF_ID, d->id, 3);
+            data[SCAL_DRIVER_OFF_STAGE] = d->stage;
+            data[SCAL_DRIVER_OFF_REGISTER] = d->reg;
+            data[SCAL_DRIVER_OFF_EXPECTED] = d->expected;
+            data[SCAL_DRIVER_OFF_ACTUAL] = d->actual;
+            data[SCAL_DRIVER_OFF_HAL_STATUS] = d->status;
+            data[SCAL_DRIVER_OFF_INITIALIZED] = d->initialized;
+            ANO_Put32(data + SCAL_DRIVER_OFF_HAL_ERROR, d->hal_error);
+            ANO_Put32(data + SCAL_DRIVER_OFF_READ_ERRORS, d->read_errors);
+            ANO_Put32(data + SCAL_DRIVER_OFF_OVERFLOW, d->overflow);
+            ANO_Put32(data + SCAL_DRIVER_OFF_NOT_READY, d->not_ready);
+            ANO_Put32(data + SCAL_DRIVER_OFF_NEW_SAMPLES, d->new_samples);
+        }
+        else if (cmd.face >= 3 && cmd.face <= 5)
+        {
+            n = Sensor_Coefficients(cmd.face, values);
+            data[SCAL_COEFF_OFF_COUNT] = (uint8_t)n;
+            for (i = 0; i < n; ++i)
+                CalWire_Float(data + SCAL_COEFF_OFF_VALUES + 4 * i, values[i]);
+        }
+        else if (cmd.face == 6)
+        {
+            for (i = 0; i < 3; ++i)
+                CalWire_Float(data + SCAL_COEFF_OFF_VALUES + 4 * i,
+                              FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL ? calibration.bias_dps[i]
+                                                                       : gyro_cal.bias_dps[i]);
+            data[SCAL_GYRO_OFF_READY] =
+                FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL ? calibration.gyro_ready : gyro_cal.ready;
+        }
+        else
+        {
+            data[3] = CAL_FAILED;
+            data[8] = CAL_BAD_COMMAND;
+        }
+        reply_size = ANO_Pack(SCAL_REPLY_ID, data, 84, reply_frame, 96);
     }
-    Attitude_Rotate(mag_to_body, corrected, working.mag_body);
+    else
+    {
+        reason = FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL
+                     ? CalService_Command(&calibration, &cmd, BSP_TimeUs())
+                     : CAL_UNAVAILABLE;
+        if (reason == CAL_OK)
+            reply_size = CalWire_Result(&calibration, reply_frame);
+        else
+        {
+            CalWire_Header(data, &cmd, CAL_FAILED, (uint8_t)reason);
+            reply_size = ANO_Pack(SCAL_REPLY_ID, data, 84, reply_frame, 96);
+        }
+    }
+    __DMB();
+    reply_pending = 1;
+}
+static void poll_commands(void)
+{
+    static uint32_t seen_overflow;
+    CalCommand cmd;
+    OS_CPU_SR cpu_sr = 0;
+    unsigned budget = 256;
+    uint8_t value;
+    if (seen_overflow != rx_overflow)
+    {
+        OS_ENTER_CRITICAL();
+        rx_read = rx_write;
+        seen_overflow = rx_overflow;
+        OS_EXIT_CRITICAL();
+        command_parser.used = 0;
+    }
+    while (budget-- && rx_read != rx_write && !command_pending && !reply_pending)
+    {
+        value = rx_ring[rx_read];
+        rx_read = (uint16_t)((rx_read + 1U) & 255U);
+        if (CalParser_Feed(&command_parser, value, &cmd))
+        {
+            OS_ENTER_CRITICAL();
+            command_mailbox = cmd;
+            command_pending = 1;
+            OS_EXIT_CRITICAL();
+        }
+    }
+}
+static void transmit_frame(uint16_t size)
+{
+    tx_started_us = BSP_TimeUs();
+    tx_deadline_us =
+        ((uint32_t)size * 10000000U + FLIGHT_UART_BAUD - 1U) / FLIGHT_UART_BAUD + 20000U;
+    tx_busy = 1;
+    if (HAL_UART_Transmit_IT(&huart1, tx_buffer, size) != HAL_OK)
+    {
+        tx_busy = 0;
+        ++tx_dropped;
+    }
 }
 static void process_sample(void)
 {
     ImuRawSample raw;
-    float native_acc[3], native_dps[3], native_rad[3], norm;
+    float native_acc[3], native_dps[3], norm;
     float *mag = NULL;
     uint32_t now;
     unsigned i;
@@ -193,6 +309,8 @@ static void process_sample(void)
             ++working.i2c_errors;
             working.flags |= STATUS_IMU_ERROR;
         }
+        if (FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL)
+            CalService_Feed(&calibration, NULL, result, working.sequence, now);
         return;
     }
     working.flags |= STATUS_IMU_NEW;
@@ -215,12 +333,19 @@ static void process_sample(void)
     {
         working.imu_raw[i] = raw.accel[i];
         working.imu_raw[i + 3] = raw.gyro[i];
-        native_acc[i] = ((float)raw.accel[i] / 16384.0f - accel_bias[i]) * accel_scale[i];
         native_dps[i] = (float)raw.gyro[i] / 65.5f;
+    }
+    if (FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL)
+    {
+        CalService_Feed(&calibration, &raw, result, working.sequence, now);
+        working.cal_samples = (uint16_t)calibration.moments.count;
+        if (calibration.gyro_ready)
+            working.flags |= STATUS_GYRO_CALIBRATED;
+        return; /* Raw sampling never calls Madgwick or depends on fitted config. */
     }
     if (!config_ok)
         return;
-    Attitude_Rotate(imu_to_body, native_acc, working.accel_g);
+    Sensor_Accel(raw.accel, native_acc, working.accel_g);
     if (warmup_samples < FLIGHT_GYRO_WARMUP_SAMPLES)
     {
         ++warmup_samples;
@@ -236,9 +361,8 @@ static void process_sample(void)
     for (i = 0; i < 3; ++i)
     {
         working.gyro_bias_dps[i] = gyro_cal.bias_dps[i];
-        native_rad[i] = (native_dps[i] - gyro_cal.bias_dps[i]) * 0.017453292519943295f;
     }
-    Attitude_Rotate(imu_to_body, native_rad, working.gyro_rad_s);
+    Sensor_Gyro(raw.gyro, gyro_cal.bias_dps, working.gyro_rad_s);
     norm = length3(working.accel_g);
     acc_trusted = isfinite(norm) && norm >= FLIGHT_ACCEL_MIN_G && norm <= FLIGHT_ACCEL_MAX_G;
     if (FLIGHT_FUSION_MODE == FLIGHT_FUSION_MARG && CAL_MAG_VALID && FLIGHT_IMU_AXES_CONFIRMED &&
@@ -300,6 +424,7 @@ static void AttitudeTask(void *argument)
         attitude_pending = 0;
         OS_EXIT_CRITICAL();
         start = BSP_TimeUs();
+        handle_cal_command();
         process_sample();
         working.exec_us = Time_ElapsedUs(BSP_TimeUs(), start);
         if (working.exec_us > working.exec_max_us)
@@ -335,7 +460,7 @@ static void send_snapshot(const FlightSnapshot *s)
         }
         return;
     }
-    if (FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG)
+    if (FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL || FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG)
     {
         size = ANO_PackDiagnostic(s, tx_buffer, sizeof(tx_buffer));
     }
@@ -371,26 +496,67 @@ static void send_snapshot(const FlightSnapshot *s)
         ++tx_dropped;
         return;
     }
-    tx_started_us = BSP_TimeUs();
-    tx_deadline_us =
-        ((uint32_t)size * 10000000U + FLIGHT_UART_BAUD - 1U) / FLIGHT_UART_BAUD + 20000U;
-    tx_busy = 1; /* Set before enabling TX interrupts: completion may preempt. */
-    if (HAL_UART_Transmit_IT(&huart1, tx_buffer, size) != HAL_OK)
-    {
-        tx_busy = 0;
-        ++tx_dropped;
-    }
+    transmit_frame(size);
 }
+
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *uart)
 {
     if (uart->Instance == USART1)
         tx_busy = 0;
 }
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
+{
+    uint16_t next;
+    if (uart->Instance != USART1)
+        return;
+    ++rx_bytes;
+    next = (uint16_t)((rx_write + 1U) & 255U);
+    if (next == rx_read)
+        ++rx_overflow;
+    else
+    {
+        rx_ring[rx_write] = rx_byte;
+        __DMB();
+        rx_write = next;
+    }
+    (void)HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+}
 /* Do not free a still-running TX buffer on an unrelated RX line error. */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
-    if (uart->Instance == USART1 && uart->gState == HAL_UART_STATE_READY)
-        tx_busy = 0;
+    if (uart->Instance == USART1)
+    {
+        ++rx_errors;
+        if (uart->gState == HAL_UART_STATE_READY)
+            tx_busy = 0;
+        /* A blocking RX error ends RX in HAL. RX state is independent of TX. */
+        if (uart->RxState == HAL_UART_STATE_READY)
+            (void)HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+    }
+}
+static void telemetry_step(FlightSnapshot *s)
+{
+    OS_CPU_SR cpu_sr = 0;
+    poll_commands();
+    if (huart1.RxState == HAL_UART_STATE_READY)
+        (void)HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+    Flight_GetSnapshot(s);
+    if (reply_pending && !tx_busy)
+    {
+        OS_ENTER_CRITICAL();
+        memcpy(tx_buffer, reply_frame, reply_size);
+        {
+            uint16_t size = reply_size;
+            reply_pending = 0;
+            OS_EXIT_CRITICAL();
+            transmit_frame(size);
+        }
+        quiet_slot = 1;
+    }
+    else if (quiet_slot)
+        quiet_slot = 0;
+    else
+        send_snapshot(s);
 }
 static void TelemetryTask(void *argument)
 {
@@ -401,7 +567,9 @@ static void TelemetryTask(void *argument)
     uint32_t report_divider = 0;
     char text[384];
     const uint32_t rate =
-        (FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG) ? FLIGHT_DIAG_HZ : FLIGHT_ANO_HZ;
+        (FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL || FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG)
+            ? FLIGHT_DIAG_HZ
+            : FLIGHT_ANO_HZ;
     (void)argument;
     for (;;)
     {
@@ -414,8 +582,7 @@ static void TelemetryTask(void *argument)
         OS_ENTER_CRITICAL();
         telemetry_pending = 0;
         OS_EXIT_CRITICAL();
-        Flight_GetSnapshot(&s);
-        send_snapshot(&s);
+        telemetry_step(&s);
         if (++report_divider >= 2U * rate)
         {
             report_divider = 0;
@@ -449,6 +616,7 @@ void Flight_Start(void)
     filter.q[0] = 1;
     filter.beta = FLIGHT_BETA;
     GyroCalibration_Reset(&gyro_cal);
+    CalService_Init(&calibration);
     config_ok = (uint8_t)calibration_valid();
     imu_ok = (uint8_t)IMU_Init();
     mag_present = (uint8_t)Magnetometer_Init();
@@ -480,6 +648,7 @@ void Flight_Start(void)
     if (error != OS_ERR_NONE)
         Error_Handler();
     publish();
+    (void)HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
     __HAL_TIM_CLEAR_FLAG(&htim4, TIM_FLAG_UPDATE);
     if (HAL_TIM_Base_Start_IT(&htim4) != HAL_OK)
         Error_Handler();

@@ -1,5 +1,15 @@
 #ifndef FLIGHT_CONFIG_H
 #define FLIGHT_CONFIG_H
+#include "sensor_calibration.h"
+
+#define FLIGHT_APP_ATTITUDE 0
+#define FLIGHT_APP_SENSOR_CAL 1
+#ifndef FLIGHT_APP_MODE
+#define FLIGHT_APP_MODE FLIGHT_APP_ATTITUDE
+#endif
+#if FLIGHT_APP_MODE < 0 || FLIGHT_APP_MODE > 1
+#error Invalid FLIGHT_APP_MODE
+#endif
 
 /* Bench firmware: motor outputs are deliberately never started. */
 #define FLIGHT_FUSION_GYRO 0
@@ -10,7 +20,7 @@
 #define FLIGHT_TELEM_FIXED 2
 
 #ifndef FLIGHT_UART_BAUD
-#define FLIGHT_UART_BAUD 9600U
+#define FLIGHT_UART_BAUD 115200U
 #endif
 #ifndef FLIGHT_FUSION_MODE
 #define FLIGHT_FUSION_MODE FLIGHT_FUSION_IMU
@@ -29,24 +39,25 @@
 #define FLIGHT_SEND_QUATERNION 0
 #endif
 #ifndef FLIGHT_BETA
-#define FLIGHT_BETA 0.05f
+#define FLIGHT_BETA 0.02f
 #endif
 #define FLIGHT_GYRO_WARMUP_SAMPLES 200U
 #define FLIGHT_GYRO_CAL_SAMPLES 1000U
 #define FLIGHT_MAG_MAX_AGE_US 100000U
 #define FLIGHT_MAX_DT_US 20000U
 #define FLIGHT_I2C_TIMEOUT_MS 3U
+#define FLIGHT_I2C_BUS_IDLE_TIMEOUT_MS 1U
 #define FLIGHT_ACCEL_MIN_G 0.85f
 #define FLIGHT_ACCEL_MAX_G 1.15f
 /* Change these ONLY after checking actual sensor-to-body directions. */
 #ifndef FLIGHT_IMU_AXES_CONFIRMED
-#define FLIGHT_IMU_AXES_CONFIRMED 0
+#define FLIGHT_IMU_AXES_CONFIRMED CAL_IMU_AXES_CONFIRMED
 #endif
 #ifndef FLIGHT_MAG_AXES_CONFIRMED
-#define FLIGHT_MAG_AXES_CONFIRMED 0
+#define FLIGHT_MAG_AXES_CONFIRMED CAL_MAG_AXES_CONFIRMED
 #endif
 /* Frame conjugation q_display = r * q * conjugate(r), identity by default. */
-#define FLIGHT_DISPLAY_BASIS_Q {1.0f, 0.0f, 0.0f, 0.0f}
+#define FLIGHT_DISPLAY_BASIS_Q {0.0f, 0.0f, 1.0f, 0.0f}
 /* FIXED mode bypasses sensor validity; use 0/30 deg one axis at a time. */
 #ifndef FLIGHT_FIXED_ROLL_DEG
 #define FLIGHT_FIXED_ROLL_DEG 0.0f
@@ -68,7 +79,7 @@
 #error Telemetry rates must divide the IMU timer rate
 #endif
 /* 8N1: keep serial utilization below 75 percent. DIAG is 67 bytes. */
-#if FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG
+#if FLIGHT_APP_MODE == FLIGHT_APP_SENSOR_CAL || FLIGHT_TELEMETRY_MODE == FLIGHT_TELEM_DIAG
 #if (67U * FLIGHT_DIAG_HZ * 10U * 4U) > (FLIGHT_UART_BAUD * 3U)
 #error Diagnostic telemetry exceeds serial budget
 #endif

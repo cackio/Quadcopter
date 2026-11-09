@@ -84,6 +84,39 @@ def fit_accelerometer(faces):
         if np.max(np.std(values, axis=0)) > 0.02:
             raise ValueError(f"Face {name}: sensor moved during capture")
         face_means[name] = np.mean(values, axis=0)
+    return _fit_accel_means(face_means)
+
+
+class AccelerometerFaceError(ValueError):
+    def __init__(self, quality):
+        self.quality = quality
+        failed = [name for name, row in quality.items() if not row["passed"]]
+        details = "; ".join(
+            f"{name}: residual={quality[name]['residual_g']:.4f}g, "
+            f"corrected={np.round(quality[name]['corrected_g'],4).tolist()}"
+            for name in failed)
+        super().__init__("misaligned face or cross-axis error; "+details)
+
+
+def accelerometer_face_quality(face_means, bias, scale):
+    """Diagnostic directions assume the diagonal calibration model; angular
+    errors are NOT independent measurements of the fixture's actual tilt."""
+    quality = {}
+    for name, mean in face_means.items():
+        expected = np.zeros(3)
+        expected["xyz".index(name[1])] = 1 if name[0] == "p" else -1
+        corrected = (mean-bias)*scale
+        residual = float(np.linalg.norm(corrected-expected))
+        angle = float(np.degrees(np.arccos(np.clip(np.dot(corrected,expected)/np.linalg.norm(corrected),-1,1))))
+        quality[name] = {"raw_mean_g":np.asarray(mean).tolist(), "corrected_g":corrected.tolist(),
+                         "expected_g":expected.tolist(), "residual_g":residual,
+                         "model_direction_error_deg":angle, "passed":residual<=0.08}
+    return quality
+
+
+def _fit_accel_means(face_means):
+    bias = np.zeros(3)
+    scale = np.ones(3)
     for axis, label in enumerate("xyz"):
         positive = face_means["p"+label][axis]
         negative = face_means["n"+label][axis]
@@ -91,11 +124,9 @@ def fit_accelerometer(faces):
             raise ValueError(f"Axis {label}: wrong face/sign/range")
         bias[axis] = (positive+negative)/2
         scale[axis] = 2/(positive-negative)
-    for name, mean in face_means.items():
-        expected = np.zeros(3)
-        expected["xyz".index(name[1])] = 1 if name[0] == "p" else -1
-        if np.linalg.norm((mean-bias)*scale-expected) > 0.08:
-            raise ValueError(f"Face {name}: misaligned face or cross-axis error")
+    quality = accelerometer_face_quality(face_means,bias,scale)
+    if any(not row["passed"] for row in quality.values()):
+        raise AccelerometerFaceError(quality)
     return bias, scale
 
 
@@ -155,9 +186,12 @@ def export_header(base, output, replacements):
         text = "".join(updated)
         if count != 1:
             raise ValueError(f"Expected exactly one {name} in base header")
+    if output is None:
+        return text
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
+    return text
 
 
 def main():
@@ -192,3 +226,43 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def fit_accelerometer_statistics(faces):
+    """Native LSB Welford summaries of >=1000 new samples per face."""
+    means = {}
+    for name in ("px","nx","py","ny","pz","nz"):
+        if name not in faces:
+            raise ValueError(f"Missing face {name}")
+        row = faces[name]
+        mean, std = np.asarray(row["mean_raw"],float), np.asarray(row["std_raw"],float)
+        if row["count"] < 1000 or row["state"] != SCHEMA["CAL_DONE"]:
+            raise ValueError(f"Face {name}: incomplete local capture")
+        if mean.shape != (6,) or std.shape != (6,) or not np.isfinite([mean,std]).all() or (std<0).any():
+            raise ValueError(f"Face {name}: invalid statistics")
+        if std[:3].max()/16384 > 0.02 or std[3:].max()/65.5 > 0.2:
+            raise ValueError(f"Face {name}: sensor moved/noisy")
+        means[name] = mean[:3]/16384
+    return _fit_accel_means(means)
+
+
+def validate_magnetometer(samples,bias,matrix):
+    samples=np.asarray(samples,float); bias=np.asarray(bias,float); matrix=np.asarray(matrix,float)
+    if samples.ndim!=2 or samples.shape[1]!=3 or len(samples)<300 or not np.isfinite(samples).all() or (samples==-4096).any():
+        raise ValueError("Independent magnetic validation needs >=300 valid raw points")
+    if bias.shape!=(3,) or matrix.shape!=(3,3) or not np.isfinite(bias).all() or not np.isfinite(matrix).all():
+        raise ValueError("Invalid magnetic coefficients")
+    if not np.allclose(matrix,matrix.T,atol=1e-8) or np.linalg.eigvalsh(matrix).min()<=0:
+        raise ValueError("Magnetic matrix must be symmetric positive definite")
+    cov=np.linalg.eigvalsh(np.cov(samples.T))
+    if cov[0]<=0 or cov[-1]/cov[0]>100:
+        raise ValueError("Independent magnetic validation has poor 3D coverage")
+    corrected=(samples-bias)@matrix.T
+    norms=np.linalg.norm(corrected,axis=1); good=np.abs(norms-1)<0.15
+    rms=float(np.sqrt(np.mean((norms[good]-1)**2))) if good.any() else float("inf")
+    octants=((corrected[good]>0)*[1,2,4]).sum(axis=1)
+    coverage=np.bincount(octants,minlength=8)
+    if good.mean()<0.9 or rms>0.05 or coverage.min()<5:
+        raise ValueError("Independent magnetic residual/outlier/coverage check failed")
+    return {"samples":len(samples),"rms_relative":rms,"inlier_fraction":float(good.mean()),
+            "max_norm_error":float(np.max(np.abs(norms-1))),"octants":coverage.tolist()}
