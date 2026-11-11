@@ -939,37 +939,52 @@ void IMU_Quaternion_To_Euler(const Quaternion_t *q, EulerAngle_t *e)
      *     [ 2(bc+ad)     1-2(b²+d²)   2(cd-ab) ]
      *     [ 2(bd-ac)     2(cd+ab)     1-2(b²+c²)]
      *
-     * 笔记给出的 Z-Y-X 提取式：
-     *   pitch θ = asin(2ac + 2bd)
-     *   yaw   ψ = atan2(2ad - 2bc, 1 - 2c² - 2d²)
-     *   roll  φ = atan2(2ab - 2cd, 1 - 2b² - 2c²)
+     * Z-Y-X 提取式必须直接从上面这个 R_q 的对应元素取，不能凭记忆写：
+     *   R[2][0] = -sinθ   -> pitch θ = asin(-R[2][0]) = asin(2bd - 2ac)
+     *   R[2][1] = sinφcosθ-> roll  φ = atan2(R[2][1], R[2][2])
+     *                                     = atan2(2cd + 2ab, 1 - 2b² - 2c²)
+     *   R[1][0] = cosθsinψ-> yaw   ψ = atan2(R[1][0], R[0][0])
+     *                                     = atan2(2bc + 2ad, 1 - 2c² - 2d²)
+     *
+     * 三个交叉项全部是“加”：
+     *   pitch = asin(2(q0q2 - q1q3))
+     *   roll  = atan2(2(q0q1 + q2q3), 1 - 2(q1² + q2²))
+     *   yaw   = atan2(2(q0q3 + q1q2), 1 - 2(q2² + q3²))
+     *
+     * 写成“减”等价于把 q 取共轭，也就是把 C_b^e 当成 C_e^b 用：
+     *   单轴旋转时看不太出来（交叉项为 0，两种写法结果一样），
+     *   一旦 roll/pitch/yaw 同时非零就会串轴 ——
+     *   偏航 155° 时滚转 1° 会算出俯仰 -20° 这种完全对不上的假值，
+     *   3D 模型表现为“板子往左滚、模型往右滚”，怎么转都跟不到位。
      *
      * 其中 a=q0(w), b=q1(x), c=q2(y), d=q3(z)。
      * asin 的定义域是 [-1,1]，浮点误差可能给出 1.0000001，
      * 必须先 clamp，否则返回 NaN。
      * ------------------------------------------------------------------------ */
     float q0 = q->w, q1 = q->x, q2 = q->y, q3 = q->z;
-    float sin_pitch = 2.0f * (q0 * q2 + q1 * q3);
+    float sin_pitch = 2.0f * (q0 * q2 - q1 * q3);
 
     sin_pitch = IMU_Clamp(sin_pitch, -1.0f, 1.0f);
 
     e->pitch = asinf(sin_pitch);
-    e->yaw   = atan2f(2.0f * (q0 * q3 - q1 * q2),
+    e->yaw   = atan2f(2.0f * (q0 * q3 + q1 * q2),
                       1.0f - 2.0f * (q2 * q2 + q3 * q3));
-    e->roll  = atan2f(2.0f * (q0 * q1 - q2 * q3),
+    e->roll  = atan2f(2.0f * (q0 * q1 + q2 * q3),
                       1.0f - 2.0f * (q1 * q1 + q2 * q2));
 }
 
 void IMU_Euler_To_Quaternion(const EulerAngle_t *e, Quaternion_t *q)
 {
     /* ------------------------------------------------------------------------
-     * 笔记 C2：q_net = q_x ⊗ q_y ⊗ q_z（Z-Y-X 外旋）
-     * 展开：
-     *   a = cψcθcφ - sψsθsφ
-     *   b = cψcθsφ + sψsθcφ
-     *   c = cψsθcφ - sψcθsφ
-     *   d = sψcθcφ + cψsθsφ
+     * 笔记 C2：q_net = q_z ⊗ q_y ⊗ q_x（Z-Y-X 外旋），展开就是
+     *   a = cφcθcψ + sφsθsψ
+     *   b = sφcθcψ - cφsθsψ
+     *   c = cφsθcψ + sφcθsψ
+     *   d = cφcθsψ - sφsθcψ
      * 半角：φ=roll/2, θ=pitch/2, ψ=yaw/2
+     * 必须和 IMU_Quaternion_To_Euler 用同一套约定（C_b^e），
+     * 否则这里转出来的四元数跟加计算出来的 roll/pitch 对不上，
+     * 上电初始对准那一下就会被梯度项往回拽，姿态先歪一段时间再慢慢回正。
      * 本式与 IMU_Quaternion_To_Euler 严格互逆（已做数值自检：
      * 任取一组欧拉角 -> 四元数 -> 欧拉角，误差 < 0.1°）。
      * 用途：校准时由初始 roll/pitch/yaw 构造四元数。
@@ -982,10 +997,10 @@ void IMU_Euler_To_Quaternion(const EulerAngle_t *e, Quaternion_t *q)
     float ctheta = cosf(theta), stheta = sinf(theta);
     float cpsi = cosf(psi),   spsi = sinf(psi);
 
-    q->w = cpsi * ctheta * cphi - spsi * stheta * sphi;
-    q->x = cpsi * ctheta * sphi + spsi * stheta * cphi;
-    q->y = cpsi * stheta * cphi - spsi * ctheta * sphi;
-    q->z = spsi * ctheta * cphi + cpsi * stheta * sphi;
+    q->w = cphi * ctheta * cpsi + sphi * stheta * spsi;
+    q->x = sphi * ctheta * cpsi - cphi * stheta * spsi;
+    q->y = cphi * stheta * cpsi + sphi * ctheta * spsi;
+    q->z = cphi * ctheta * spsi - sphi * stheta * cpsi;
 }
 
 /* ============================================================================
@@ -1008,10 +1023,10 @@ void IMU_Madgwick_Gradient(const Quaternion_t *q,
      *       vz = q0² - q1² - q2² + q3²   （等价于 1-2q1²-2q2²）
      *   残差 f0..f2 = v - a
      *
-     *   重力雅可比 Jg = ∂v/∂q（3×4）：
-     *       [ -2q2   2q1   2q0   0 ]
-     *       [  2q3   2q0  -2q1   0 ]
-     *       [ -2q0   2q3  -2q2   0 ]
+     *   重力雅可比 Jg = ∂v/∂q（3×4），按上面 vz 的未归一化写法：
+     *       [ -2q2   2q3  -2q0   2q1 ]
+     *       [  2q1   2q0   2q3   2q2 ]
+     *       [  2q0  -2q1  -2q2   2q3 ]
      *   转置相乘后重力梯度：
      *       e0 = -2q2·f0 + 2q1·f1 + 2q0·f2
      *       e1 =  2q3·f0 + 2q0·f1 - 2q1·f2
