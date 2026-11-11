@@ -8,10 +8,18 @@
  *    帧头(0xAA) + 地址(0xFF) + 功能码 + 数据长度 + 数据区 + SUM校验 + ADD校验
  *
  *  功能码：
+ *    0x03      : 姿态数据帧（欧拉角，匿名协议内置）
+ *    0x04      : 姿态数据帧（四元数，匿名协议内置）
  *    0xF1~0xFA : 用户数据帧（灵活格式帧，可自定义内容）
  *    0xE0      : 读设备信息（上位机下发）
  *    0xE1      : 读参数（上位机下发）
  *    0xE2      : 写参数（上位机下发）
+ *
+ *  0x03 / 0x04 与 0xF1~0xFA 的区别（这是能不能在匿名上位机上看到姿态的关键）：
+ *    0x03 / 0x04 是匿名协议规定死的"标准姿态帧"，数据区格式固定，
+ *      上位机的"3D 姿态显示""数据波形""四元数"控件开箱即认，无需配置；
+ *    0xF1~0xFA 是"用户自定义帧"，必须在匿名上位机的"用户数据帧"页面里
+ *      手工填功能码、字段类型、缩放系数才显示，漏填就一片空白。
  *
  *  依赖：
  *    - main.h   (STM32 HAL 类型)
@@ -43,6 +51,10 @@ extern "C" {
 #define ANO_FUNC_PID       0xF4    /* PID 参数（所有 PID 值） */
 #define ANO_FUNC_MOTOR     0xF5    /* 电机输出（4 路） */
 #define ANO_FUNC_STATUS    0xF6    /* 飞行状态（模式 + armed + PPM 通道） */
+
+/* 标准姿态帧功能码（匿名协议内置，上位机无需配置） */
+#define ANO_FUNC_EULER     0x03    /* 欧拉角：roll/pitch/yaw(int16 ×100) + 版本(1) = 7 字节 */
+#define ANO_FUNC_QUATER    0x04    /* 四元数：q0~q3(int16 ×10000) + 版本(1) = 9 字节 */
 
 /* 飞控参数功能码（上位机 <-> 下位机） */
 #define ANO_FUNC_GET_INFO  0xE0    /* 读设备信息（上位机下发） */
@@ -99,7 +111,29 @@ void Ano_Send_Frame(uint8_t func, const uint8_t *data, uint8_t len);
 
 /* ---- 发送接口（供 UartTask 调用） ---- */
 
-void Ano_Send_Attitude(void);    /* 姿态 + 陀螺仪 */
+void Ano_Send_Attitude(void);    /* 姿态 + 陀螺仪（0xF1，自定义帧） */
+
+/**
+ * @brief  发送标准欧拉角姿态帧（0x03）
+ *
+ * 数据区固定 7 字节：
+ *   roll(int16, ×100, 单位 0.01°) + pitch(int16, ×100) + yaw(int16, ×100) + 版本(1)
+ *
+ * 匿名上位机的"3D 姿态显示""数据波形"直接识别这个功能码，
+ * 不需要在"用户数据帧"里做任何配置，是最省事的姿态监控方式。
+ */
+void Ano_Send_Euler(void);
+
+/**
+ * @brief  发送标准四元数姿态帧（0x04）
+ *
+ * 数据区固定 9 字节：
+ *   q0~q3(int16, ×10000) + 版本(1)
+ *
+ * 注意顺序是 w,x,y,z（q0=w），与工程里 Quaternion_t 的字段顺序一致；
+ * 上位机按同样顺序解析，写成 x,y,z,w 会让 3D 模型乱转。
+ */
+void Ano_Send_Quater(void);
 void Ano_Send_Sensor_Raw(void);  /* 传感器原始数据 */
 void Ano_Send_Altitude(void);    /* 高度数据 */
 void Ano_Send_Pid_Params(void);  /* PID 参数 */

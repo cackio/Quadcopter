@@ -117,16 +117,46 @@ void Ano_Send_Frame(uint8_t func, const uint8_t *data, uint8_t len)
  *  发送各数据帧
  * ========================================================================== */
 
+/**
+ * @brief 浮点缩放成 int16（匿名协议数据区统一用 int16）
+ * @param value 原始浮点值
+ * @param scale 缩放系数（欧拉角 100，四元数 10000）
+ * @return 缩放并饱和后的 int16
+ *
+ * 为什么不直接写 (int16_t)(value * scale)：
+ *   1) 姿态解算在未收敛/发散时可能产出 NaN 或 Inf，
+ *      浮点 NaN 转整型是未定义行为，不同编译器给的垃圾值还不一样，
+ *      上位机画出来就是满屏毛刺，所以必须显式挡掉；
+ *   2) 直接截断会丢掉亚 LSB 的信息，波形看着像台阶，改成四舍五入更平滑；
+ *   3) 超出 int16 范围必须饱和，否则会回绕成反号，
+ *      比如 400° 变成 -255°，上位机的 3D 模型会瞬间翻个个儿。
+ */
+static int16_t Ano_Scale(float value, float scale)
+{
+    float v = value * scale;
+
+    if (!isfinite(v)) {
+        return 0;
+    }
+    if (v > 32767.0f) {
+        return 32767;
+    }
+    if (v < -32768.0f) {
+        return -32768;
+    }
+    return (int16_t)lroundf(v);
+}
+
 void Ano_Send_Attitude(void)
 {
     uint8_t data[16];
     uint8_t i = 0;
-    int16_t roll  = (int16_t)(euler_angle.roll  * RAD_TO_DEG * 100.0f);
-    int16_t pitch = (int16_t)(euler_angle.pitch * RAD_TO_DEG * 100.0f);
-    int16_t yaw   = (int16_t)(euler_angle.yaw   * RAD_TO_DEG * 100.0f);
-    int16_t gx = (int16_t)(gyro_body.x * RAD_TO_DEG * 10.0f);
-    int16_t gy = (int16_t)(gyro_body.y * RAD_TO_DEG * 10.0f);
-    int16_t gz = (int16_t)(gyro_body.z * RAD_TO_DEG * 10.0f);
+    int16_t roll  = Ano_Scale(euler_angle.roll  * RAD_TO_DEG, 100.0f);
+    int16_t pitch = Ano_Scale(euler_angle.pitch * RAD_TO_DEG, 100.0f);
+    int16_t yaw   = Ano_Scale(euler_angle.yaw   * RAD_TO_DEG, 100.0f);
+    int16_t gx = Ano_Scale(gyro_body.x * RAD_TO_DEG, 10.0f);
+    int16_t gy = Ano_Scale(gyro_body.y * RAD_TO_DEG, 10.0f);
+    int16_t gz = Ano_Scale(gyro_body.z * RAD_TO_DEG, 10.0f);
 
     data[i++] = ANO_BYTE0(roll);
     data[i++] = ANO_BYTE1(roll);
@@ -142,6 +172,83 @@ void Ano_Send_Attitude(void)
     data[i++] = ANO_BYTE1(gz);
 
     Ano_Send_Frame(ANO_FUNC_ATTITUDE, data, i);
+}
+
+/**
+ * @brief 发送标准欧拉角姿态帧（0x03）
+ *
+ * 数据区（7 字节，小端）：
+ *   [0..1] roll  int16  ×100   单位 0.01°
+ *   [2..3] pitch int16  ×100   单位 0.01°
+ *   [4..5] yaw   int16  ×100   单位 0.01°
+ *   [6]    版本  uint8  固定 0
+ *
+ * 为什么要单独发这一帧，而不是只发上面的 0xF1：
+ *   0xF1 是"用户自定义帧"，匿名上位机不知道里面装的是什么，
+ *   必须在"用户数据帧"页面里手工配好字段和缩放才会显示。
+ *   0x03 是协议内置的标准姿态帧，上位机的"3D 姿态显示"和
+ *   "数据波形"里的 roll/pitch/yaw 通道开机就认，是最省事的监控方式。
+ *   两帧同时发不冲突，0xF1 里多的陀螺仪数据仍然可以手工配出来看。
+ *
+ * 注意 euler_angle 内部是弧度，这里先乘 RAD_TO_DEG 转成度，
+ * 再交给 Ano_Scale 乘 100 打包，不要漏掉任何一次换算。
+ */
+void Ano_Send_Euler(void)
+{
+    uint8_t data[7];
+    uint8_t i = 0;
+    int16_t roll  = Ano_Scale(euler_angle.roll  * RAD_TO_DEG, 100.0f);
+    int16_t pitch = Ano_Scale(euler_angle.pitch * RAD_TO_DEG, 100.0f);
+    int16_t yaw   = Ano_Scale(euler_angle.yaw   * RAD_TO_DEG, 100.0f);
+
+    data[i++] = ANO_BYTE0(roll);
+    data[i++] = ANO_BYTE1(roll);
+    data[i++] = ANO_BYTE0(pitch);
+    data[i++] = ANO_BYTE1(pitch);
+    data[i++] = ANO_BYTE0(yaw);
+    data[i++] = ANO_BYTE1(yaw);
+    data[i++] = 0;                  /* 版本号：0 = 欧拉角模式 */
+
+    Ano_Send_Frame(ANO_FUNC_EULER, data, i);
+}
+
+/**
+ * @brief 发送标准四元数姿态帧（0x04）
+ *
+ * 数据区（9 字节，小端）：
+ *   [0..1] q0 = w  int16 ×10000
+ *   [2..3] q1 = x  int16 ×10000
+ *   [4..5] q2 = y  int16 ×10000
+ *   [6..7] q3 = z  int16 ×10000
+ *   [8]    版本   uint8 固定 0
+ *
+ * 顺序必须是 w,x,y,z：工程里 Quaternion_t 的字段就是 w/x/y/z，
+ * 上位机也按 q0=w 解析。写成 x,y,z,w 不会报错，但 3D 模型会乱转，
+ * 而且这种错很难从波形上看出来，只能靠对照实物姿态排查。
+ *
+ * 用四元数帧而不是只用欧拉角帧，好处是大角度（接近 ±90° 俯仰）时
+ * 不会出现欧拉角的奇异点，转起来更连续。
+ */
+void Ano_Send_Quater(void)
+{
+    uint8_t data[9];
+    uint8_t i = 0;
+    int16_t q0 = Ano_Scale(quaternion.w, 10000.0f);
+    int16_t q1 = Ano_Scale(quaternion.x, 10000.0f);
+    int16_t q2 = Ano_Scale(quaternion.y, 10000.0f);
+    int16_t q3 = Ano_Scale(quaternion.z, 10000.0f);
+
+    data[i++] = ANO_BYTE0(q0);
+    data[i++] = ANO_BYTE1(q0);
+    data[i++] = ANO_BYTE0(q1);
+    data[i++] = ANO_BYTE1(q1);
+    data[i++] = ANO_BYTE0(q2);
+    data[i++] = ANO_BYTE1(q2);
+    data[i++] = ANO_BYTE0(q3);
+    data[i++] = ANO_BYTE1(q3);
+    data[i++] = 0;                  /* 版本号：0 = 四元数模式 */
+
+    Ano_Send_Frame(ANO_FUNC_QUATER, data, i);
 }
 
 void Ano_Send_Sensor_Raw(void)
@@ -267,6 +374,8 @@ void Ano_Send_Status(void)
 void Ano_Send_All(void)
 {
     Ano_Send_Attitude();
+    Ano_Send_Euler();
+    Ano_Send_Quater();
     Ano_Send_Sensor_Raw();
     Ano_Send_Altitude();
     Ano_Send_Motor_Out();
