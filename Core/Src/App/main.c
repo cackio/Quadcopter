@@ -160,6 +160,7 @@ void UartTask(void *p_arg)
     uint32_t p_raw, t_raw;
     uint16_t throttle;
     float roll_deg, pitch_deg, yaw_deg;
+    float gx_dps, gy_dps, gz_dps, dt_ms;
 
     (void)p_arg;
 
@@ -250,6 +251,13 @@ void UartTask(void *p_arg)
             pitch_deg = euler_angle.pitch * RAD_TO_DEG;
             yaw_deg   = euler_angle.yaw   * RAD_TO_DEG;
 
+            /* 折算成 °/s 和 ms，方便直接和手上的动作对比：
+             * 转 90°/s 时这里应该读到 90 左右，dt 应该稳定在 10 ms 附近。 */
+            gx_dps = gyro_body.x * RAD_TO_DEG;
+            gy_dps = gyro_body.y * RAD_TO_DEG;
+            gz_dps = gyro_body.z * RAD_TO_DEG;
+            dt_ms  = imu_dt * 1000.0f;
+
             OS_EXIT_CRITICAL();
 
             snprintf(data, sizeof(data),
@@ -258,6 +266,7 @@ void UartTask(void *p_arg)
                      "Accel:%d,%d,%d\r\n"
                      "Gyro:%d,%d,%d\r\n"
                      "Mag:%d,%d,%d\r\n"
+                     "Rate:%.0f,%.0f,%.0f dps  dt:%.1fms\r\n"
                      "Pre_RAW:%lu Tem_RAW:%lu\r\n\r\n",
                      throttle,
                      (unsigned)ano_rx_frames,
@@ -265,6 +274,7 @@ void UartTask(void *p_arg)
                      ax, ay, az,
                      gx, gy, gz,
                      mx, my, mz,
+                     gx_dps, gy_dps, gz_dps, dt_ms,
                      (unsigned long)p_raw,
                      (unsigned long)t_raw);
 
