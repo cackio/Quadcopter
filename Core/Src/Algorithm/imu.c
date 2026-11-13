@@ -808,6 +808,7 @@ void IMU_Attitude_Update(void)
     float grad[4];
     Vec3f_t a, m;
     float an, mn;
+    uint8_t use_mag;
     float beta;
     float q0n, q1n, q2n, q3n, qn;
 
@@ -880,13 +881,20 @@ void IMU_Attitude_Update(void)
     /* ---- 步骤 4：∇E = Jᵀf（加计 3 + 地磁 3 = 6×1 残差，笔记 C6/C7）----
      *   f = [ v - a ; w - m ]，目标函数 E = ½ fᵀf，梯度 ∇E = Jᵀf。
      *   雅可比展开全部写在 IMU_Madgwick_Gradient 函数头注释里。
-     *   加计无效（an ≤ 0.1 g，说明在剧烈机动或掉落）时不做修正，
-     *   地磁无效（mn ≤ 0.01）时自动退化为只用重力的 3×1 残差。
+     *   加计无效（an ≤ 0.1 g，说明在剧烈机动或掉落）时不做修正。
+     *   地磁必须同时满足三个条件才参与修正：
+     *     1) IMU_USE_MAG 打开（imu.h 里一行宏，切六轴就置 0）；
+     *     2) mag_calib_valid = 1，即椭球拟合成功过。拟合失败时 offset 全是 0、
+     *        软铁矩阵是单位阵，此时读回来的 m 只是个方向大致对的原始向量，
+     *        拿它去修姿态会把滚转/俯仰一起带歪；
+     *     3) mn > 0.01，排除 I2C 读失败留下的全零数据。
+     *   三个条件缺一个就退化成只有重力的 3×1 残差（六轴）。
      */
+    use_mag = (IMU_USE_MAG && mag_calib_valid && (mn > 0.01f)) ? 1u : 0u;
+
     g0 = 0.0f; g1 = 0.0f; g2 = 0.0f; g3 = 0.0f;
     if (an > 0.1f) {
-        IMU_Madgwick_Gradient(&quaternion, &a, &m,
-                              (mn > 0.01f) ? 1u : 0u, grad);
+        IMU_Madgwick_Gradient(&quaternion, &a, &m, use_mag, grad);
         g0 = grad[0];
         g1 = grad[1];
         g2 = grad[2];

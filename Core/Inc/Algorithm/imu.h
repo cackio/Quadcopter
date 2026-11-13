@@ -52,6 +52,12 @@ extern "C" {
 #define IMU_BETA_DEFAULT  0.1f      /* Madgwick 梯度下降权重 β */
 #define IMU_DT_DEFAULT    0.001f    /* 采样周期默认值（由定时器测量覆盖） */
 
+/* 地磁是否参与融合（1=九轴，0=六轴）
+ * 跟 main.c 的 PID_SHELL_MODE 一个用法：改这一行，重新编译就换算法。
+ * 六轴只用陀螺 + 加计，偏航会慢慢漂；九轴用地磁锁偏航，但地磁没校准好
+ * 或者轴装反了的时候，是它把滚转/俯仰一起带偏的，所以出问题先切 0 排除。 */
+#define IMU_USE_MAG       1
+
 /* 四元数结构体（w, x, y, z） */
 typedef struct
 {

@@ -51,6 +51,7 @@
  * 这里统一放大，保证校准结束那一刻也不会溢出。 */
 #define SENSOR_TASK_STK_SIZE   512   /* 2 KB   */
 #define UART_TASK_STK_SIZE     512   /* 2 KB，含 char data[220] 和 snprintf 的临时空间 */
+#define BARO_TASK_STK_SIZE     256   /* 1 KB，只有 MS5611_Read_Raw */
 #define START_TASK_STK_SIZE    384   /* 1.5 KB，含 BSP_Init + 创建三个任务 */
 #define PIDSHELL_TASK_SIZE     256
 #define PIDCORE_TASK_SIZE      256
@@ -60,12 +61,14 @@
 #define PIDCORE_TASK_PRIO      7
 #define SENSOR_TASK_PRIO       8
 #define UART_TASK_PRIO         9
+#define BARO_TASK_PRIO         10
 
 /* 每个任务的周期（单位：tick） 当前tick为10ms */
 #define SENSOR_TASK_PERIOD    1
 #define UART_TASK_PERIOD      5
 #define PIDSHELL_TASK_PERIOD  4
 #define PIDCORE_TASK_PERIOD   1
+#define BARO_TASK_PERIOD      20   /* 200ms */
 
 /* USER CODE END PD */
 
@@ -79,6 +82,7 @@
 OS_STK StartTaskStk[START_TASK_STK_SIZE];
 OS_STK SensorTaskStk[SENSOR_TASK_STK_SIZE];
 OS_STK UartTaskStk[UART_TASK_STK_SIZE];
+OS_STK BaroTaskStk[BARO_TASK_STK_SIZE];
 OS_STK PIDShellTaskStk[PIDSHELL_TASK_SIZE];
 OS_STK PIDCoreTaskStk[PIDCORE_TASK_SIZE];
 /* USER CODE END PV */
@@ -95,8 +99,6 @@ void StartTask(void *p_arg);
 
 void SensorTask(void *p_arg)
 {
-    static uint8_t ms_div = 0;
-
     (void)p_arg;
 
     while (1)
@@ -104,6 +106,9 @@ void SensorTask(void *p_arg)
         /*
          * 姿态通道：MPU6050 + HMC5883L 每个周期都读，
          * 校准期间走校准状态机，校准完成后走 Madgwick 姿态解算。
+         * 气压计不放在这个循环里：MS5611_Read_Raw 内部有两段 HAL_Delay(10)，
+         * 每 200ms 会把姿态采样卡停 20ms，这一段时间的角速度是补不回来的。
+         * 已经挪到下面的 BaroTask，它优先级最低，卡住也只影响它自己。
          */
         MPU6050_Read_Raw();
         HMC5883L_Read_Raw();
@@ -118,19 +123,26 @@ void SensorTask(void *p_arg)
         }
 
         /*
-         * 气压计与姿态无关，且阻塞约 20ms，降频到 200ms 读取一次。
-         */
-        if (++ms_div >= 20)
-        {
-            ms_div = 0;
-            MS5611_Read_Raw();
-        }
-
-        /*
          * 1 tick = 10ms（OS_TICKS_PER_SEC = 100），姿态更新 100Hz。
          * imu_dt 由 DWT 实测，周期抖动不会影响积分精度。
          */
         OSTimeDly(SENSOR_TASK_PERIOD);
+    }
+}
+
+/*
+ * 气压计任务：和姿态彻底解耦，200ms 读一次。
+ * 里面约 20ms 的阻塞（HAL_Delay 等 ADC 转换）只会占空闲时间，
+ * 不影响 SensorTask 的 100Hz 姿态采样。
+ */
+void BaroTask(void *p_arg)
+{
+    (void)p_arg;
+
+    while (1)
+    {
+        MS5611_Read_Raw();
+        OSTimeDly(BARO_TASK_PERIOD);
     }
 }
 void UartTask(void *p_arg)
@@ -490,6 +502,12 @@ void StartTask(void *p_arg)
                           &UartTaskStk[UART_TASK_STK_SIZE - 1],
                           UART_TASK_PRIO);
     OSTaskNameSet(UART_TASK_PRIO, (INT8U *)"Uart Task", &os_err);
+
+    os_err = OSTaskCreate(BaroTask,
+                          (void *)0,
+                          &BaroTaskStk[BARO_TASK_STK_SIZE - 1],
+                          BARO_TASK_PRIO);
+    OSTaskNameSet(BARO_TASK_PRIO, (INT8U *)"Baro Task", &os_err);
 
     os_err = OSTaskCreate(PIDShellTask,
                           (void *)0,
