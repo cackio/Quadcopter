@@ -42,6 +42,9 @@ void MX_USART1_UART_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 
+/* 匿名协议接收缓冲（定义在 usart.c） */
+extern uint8_t ano_rx_byte;
+
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

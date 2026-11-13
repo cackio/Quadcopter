@@ -34,4 +34,5 @@ hello/main_1.o: ..\Core\Src\main.c ..\Core\Inc\main.h \
   ..\SEGGER\Systemview\SEGGER_SYSVIEW_ConfDefaults.h \
   ..\SEGGER\Systemview\SEGGER_SYSVIEW_Conf.h \
   ..\SEGGER\RTT\SEGGER_RTT_ConfDefaults.h \
-  ..\SEGGER\RTT\SEGGER_RTT_Conf.h ..\SEGGER\Systemview\os_cfg_trace.h
+  ..\SEGGER\RTT\SEGGER_RTT_Conf.h ..\SEGGER\Systemview\os_cfg_trace.h \
+  ..\Core\Inc\ano.h ..\Core\Inc\imu.h ..\Core\Inc\pid.h

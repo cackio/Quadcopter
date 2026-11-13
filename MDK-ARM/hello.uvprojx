@@ -341,7 +341,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F401xE</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\ucos\Cfg;..\ucos\Core;..\ucos\Port;..\SEGGER;..\SEGGER\RTT;..\SEGGER\Systemview</IncludePath>
+              <IncludePath>../Core/Inc;../Core/Inc/App;../Core/Inc/Driver;../Core/Inc/Algorithm;../Core/Inc/Comm;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\ucos\Cfg;..\ucos\Core;..\ucos\Port;..\SEGGER;..\SEGGER\RTT;..\SEGGER\Systemview</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -393,22 +393,67 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Application/User/Core</GroupName>
+          <GroupName>Application/App</GroupName>
           <Files>
             <File>
               <FileName>main.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Core/Src/main.c</FilePath>
+              <FilePath>../Core/Src/App/main.c</FilePath>
             </File>
+            <File>
+              <FileName>main.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/App/main.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Application/Algorithm</GroupName>
+          <Files>
+            <File>
+              <FileName>imu.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/Algorithm/imu.c</FilePath>
+            </File>
+            <File>
+              <FileName>imu.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Algorithm/imu.h</FilePath>
+            </File>
+            <File>
+              <FileName>altitude.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/Algorithm/altitude.c</FilePath>
+            </File>
+            <File>
+              <FileName>altitude.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Algorithm/altitude.h</FilePath>
+            </File>
+            <File>
+              <FileName>pid_m.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/Algorithm/pid_m.c</FilePath>
+            </File>
+            <File>
+              <FileName>pid.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Algorithm/pid.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Application/Driver</GroupName>
+          <Files>
             <File>
               <FileName>gpio.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Core/Src/gpio.c</FilePath>
+              <FilePath>../Core/Src/Driver/gpio.c</FilePath>
             </File>
             <File>
               <FileName>i2c.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Core/Src/i2c.c</FilePath>
+              <FilePath>../Core/Src/Driver/i2c.c</FilePath>
               <FileOption>
                 <CommonProperty>
                   <UseCPPCompiler>2</UseCPPCompiler>
@@ -464,7 +509,7 @@
             <File>
               <FileName>tim.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Core/Src/tim.c</FilePath>
+              <FilePath>../Core/Src/Driver/tim.c</FilePath>
               <FileOption>
                 <CommonProperty>
                   <UseCPPCompiler>2</UseCPPCompiler>
@@ -520,7 +565,7 @@
             <File>
               <FileName>usart.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Core/Src/usart.c</FilePath>
+              <FilePath>../Core/Src/Driver/usart.c</FilePath>
               <FileOption>
                 <CommonProperty>
                   <UseCPPCompiler>2</UseCPPCompiler>
@@ -583,20 +628,50 @@
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32f4xx_hal_msp.c</FilePath>
             </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Application/User/BSP</GroupName>
-          <Files>
             <File>
               <FileName>bsp.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\bsp.c</FilePath>
+              <FilePath>../Core/Src/Driver/bsp.c</FilePath>
             </File>
             <File>
               <FileName>bsp.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\Core\Inc\bsp.h</FilePath>
+              <FilePath>../Core/Inc/Driver/bsp.h</FilePath>
+            </File>
+            <File>
+              <FileName>gpio.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Driver/gpio.h</FilePath>
+            </File>
+            <File>
+              <FileName>i2c.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Driver/i2c.h</FilePath>
+            </File>
+            <File>
+              <FileName>tim.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Driver/tim.h</FilePath>
+            </File>
+            <File>
+              <FileName>usart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Driver/usart.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Application/Comm</GroupName>
+          <Files>
+            <File>
+              <FileName>ano.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/Comm/ano.c</FilePath>
+            </File>
+            <File>
+              <FileName>ano.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Core/Inc/Comm/ano.h</FilePath>
             </File>
           </Files>
         </Group>

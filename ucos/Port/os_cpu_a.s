@@ -134,6 +134,11 @@ OSStartHighRdy
     LDR     R0, =NVIC_SYSPRI14                                  ; Set the PendSV exception priority
     LDR     R1, =NVIC_PENDSV_PRI
     STRB    R1, [R0]
+    ; Removed stray draft code that broke assembly
+    
+
+    ; Removed stray draft code that broke assembly
+    
 
     MOVS    R0, #0                                              ; Set the PSP to 0 for initial context switch call
     MSR     PSP, R0

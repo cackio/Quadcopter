@@ -85,11 +85,23 @@
 
 ```
 Quadcopter/
-├── Core/                  # 应用层 (main.c / bsp.c / ...)
-├── Drivers/               # HAL + CMSIS
-├── ucos/                  # uC/OS-II 移植
-├── SEGGER/                # RTT + SystemView
-└── MDK-ARM/               # Keil 工程
+├── Core/                      # 飞控应用代码（按功能分层）
+│   ├── Inc/
+│   │   ├── App/               # 调度层：main.h
+│   │   ├── Driver/            # 硬件驱动层：bsp / usart / tim / i2c / gpio
+│   │   ├── Algorithm/         # 飞控算法层：imu / altitude / pid
+│   │   ├── Comm/              # 通信层：ano
+│   │   └── stm32f4xx_*.h      # CubeMX 生成
+│   └── Src/
+│       ├── App/               # main.c
+│       ├── Driver/            # bsp.c / usart.c / tim.c / i2c.c / gpio.c
+│       ├── Algorithm/         # imu.c / altitude.c / pid.c
+│       ├── Comm/              # ano.c
+│       └── stm32f4xx_*.c      # CubeMX 生成（it / hal_msp / system）
+├── Drivers/                   # HAL + CMSIS
+├── ucos/                      # uC/OS-II 移植
+├── SEGGER/                    # RTT + SystemView
+└── MDK-ARM/                   # Keil 工程
     └── hello.uvprojx
 ```
 

@@ -1,4 +1,4 @@
-hello/main.o: ..\Core\Src\main.c ..\Core\Inc\main.h \
+hello/main.o: ..\Core\Src\App\main.c ..\Core\Inc\App\main.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal.h \
   ..\Core\Inc\stm32f4xx_hal_conf.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_rcc.h \
@@ -18,7 +18,23 @@ hello/main.o: ..\Core\Src\main.c ..\Core\Inc\main.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_flash.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_flash_ex.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_flash_ramfunc.h \
-  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_iwdg.h \
+  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_i2c.h \
+  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_i2c_ex.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_pwr.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_pwr_ex.h \
-  ..\Core\Inc\iwdg.h ..\Core\Inc\gpio.h
+  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h \
+  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h \
+  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h \
+  ..\Core\Inc\Driver\bsp.h ..\Core\Inc\Driver\i2c.h \
+  ..\Core\Inc\Driver\tim.h ..\Core\Inc\Driver\usart.h \
+  ..\Core\Inc\Driver\gpio.h ..\ucos\Core\ucos_ii.h ..\ucos\Cfg\app_cfg.h \
+  ..\ucos\Cfg\os_cfg.h ..\ucos\Port\os_cpu.h ..\ucos\Core\os_trace.h \
+  ..\SEGGER\Systemview\os_trace_events.h \
+  ..\SEGGER\Systemview\SEGGER_SYSVIEW.h ..\SEGGER\Systemview\SEGGER.h \
+  ..\SEGGER\Systemview\Global.h \
+  ..\SEGGER\Systemview\SEGGER_SYSVIEW_ConfDefaults.h \
+  ..\SEGGER\Systemview\SEGGER_SYSVIEW_Conf.h \
+  ..\SEGGER\RTT\SEGGER_RTT_ConfDefaults.h \
+  ..\SEGGER\RTT\SEGGER_RTT_Conf.h ..\SEGGER\Systemview\os_cfg_trace.h \
+  ..\Core\Inc\Comm\ano.h ..\Core\Inc\Algorithm\imu.h \
+  ..\Core\Inc\Algorithm\pid.h

@@ -1,6 +1,9 @@
 --cpu=Cortex-M4.fp.sp
 "hello\startup_stm32f401xe.o"
-"hello\main_1.o"
+"hello\main.o"
+"hello\imu.o"
+"hello\altitude.o"
+"hello\pid_m.o"
 "hello\gpio.o"
 "hello\i2c.o"
 "hello\tim.o"
@@ -8,6 +11,7 @@
 "hello\stm32f4xx_it.o"
 "hello\stm32f4xx_hal_msp.o"
 "hello\bsp.o"
+"hello\ano.o"
 "hello\stm32f4xx_hal_i2c.o"
 "hello\stm32f4xx_hal_i2c_ex.o"
 "hello\stm32f4xx_hal_rcc.o"
