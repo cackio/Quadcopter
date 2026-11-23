@@ -14,15 +14,6 @@
  *    2. 姿态解算（四元数初始化、Madgwick 梯度下降、欧拉角提取）
  *    3. 坐标系转换（机体系 ↔ 地球系）
  *
- *  参考笔记：
- *    - C4 加速度计数据采集与校准
- *    - C5 陀螺仪和地磁数据采集及处理
- *    - C6 梯度下降与数据处理
- *    - C7 综合姿态解算与 Madgwick
- *
- *  参考代码：
- *    - examplezong/IMU.h / IMU.c (学长 Mahony 实现，可作简化版对比)
- *
  * ========================================================================== */
 
 #include "main.h"
@@ -49,13 +40,33 @@ extern "C" {
 /* 姿态解算参数 */
 #define IMU_KP_DEFAULT    2.0f      /* Mahony 互补滤波比例增益 */
 #define IMU_KI_DEFAULT    0.005f    /* Mahony 互补滤波积分增益 */
-#define IMU_BETA_DEFAULT  0.1f      /* Madgwick 梯度下降权重 β */
-#define IMU_DT_DEFAULT    0.001f    /* 采样周期默认值（由定时器测量覆盖） */
+#define IMU_BETA_DEFAULT  0.02f     /* Madgwick 梯度下降权重 β（和 Quadxie 同值） */
+#define IMU_DT_DEFAULT    0.002f    /* 采样周期默认值（由定时器测量覆盖，500Hz） */
+
+/* 加计可信区间：合加速度落在 0.85~1.15 g 时才认为它的方向就是重力方向。
+ * 猛转、磕碰时向心加速度能到 3~4 g，那会儿读数方向根本不是重力，
+ * 拿它修姿态会把滚转俯仰拽歪，表现就是“猛转几下以后平放显示不平”。
+ * 这两个数是从 Quadxie 的 FLIGHT_ACCEL_MIN_G / MAX_G 搬过来的。 */
+#define IMU_ACCEL_MIN_G   0.85f
+#define IMU_ACCEL_MAX_G   1.15f
+
+/* 地磁可信区间（相对校准后在标定姿态下量到的模长 mag_norm_ref）：
+ * 偏出 25% 就是被铁器/电流干扰了，这一拍不修偏航。 */
+#define IMU_MAG_MIN_RATIO 0.75f
+#define IMU_MAG_MAX_RATIO 1.25f
+
+/* 偏航修正增益（1/s）。地磁只修偏航，不进重力那一路梯度，
+ * 所以地磁再不准也带不歪滚转俯仰。0.5 对应约 2 s 收敛。 */
+#define IMU_YAW_K         0.5f
 
 /* 地磁是否参与融合（1=九轴，0=六轴）
  * 跟 main.c 的 PID_SHELL_MODE 一个用法：改这一行，重新编译就换算法。
- * 六轴只用陀螺 + 加计，偏航会慢慢漂；九轴用地磁锁偏航，但地磁没校准好
- * 或者轴装反了的时候，是它把滚转/俯仰一起带偏的，所以出问题先切 0 排除。 */
+ *   0 = 六轴：只用加计+陀螺，和 Quadxie 的 FLIGHT_FUSION_IMU 一样。
+ *       滚转俯仰由重力唯一确定，转多大就是多大；偏航只有相对值，
+ *       靠陀螺积分，会随时间缓慢漂（几度/分钟），但不会乱跳。
+ *   1 = 九轴：地磁只修偏航（绕地理系 z 轴转），不进重力那一路残差，
+ *       所以地磁不准也带不歪滚转俯仰。校准后用手转 90° 确认偏航方向对；
+ *       如果一直匀速转或者方向反了，说明地磁轴和 MPU 不一致，先核对安装轴向。 */
 #define IMU_USE_MAG       1
 
 /* 四元数结构体（w, x, y, z） */
@@ -132,6 +143,7 @@ extern CalibState_t  calib_state;          /* 校准状态 */
 extern AccelCalib_t  accel_calib;         /* 加速度计校准参数 */
 extern GyroCalib_t   gyro_calib;          /* 陀螺仪校准参数 */
 extern MagCalib_t    mag_calib;           /* 地磁计校准参数 */
+extern uint8_t       mag_yaw_used;        /* 最近一帧是否用了地磁修偏航 */
 extern uint8_t       mag_calib_valid;     /* 地磁椭球拟合是否有效 (1=有效) */
 extern float         imu_dt;               /* 采样周期 (由 DWT 实测) */
 
@@ -192,7 +204,7 @@ uint8_t IMU_Calib_Done(void);
 /**
  * @brief 当前校准阶段（供上位机/串口提示）
  * @return 0 = 请保持静止（陀螺零偏）  1 = 请缓慢翻转板子（加计/地磁）
- *         2 = 校准完成
+ *         2 = 校准完成，3 = 翻转结束，请放稳板子
  */
 uint8_t IMU_Calib_Stage(void);
 
@@ -220,10 +232,10 @@ uint8_t IMU_Calib_Stage(void);
  *       - q_new = q_pred + (q̇_ω - β · ∇E/‖∇E‖) · dt（笔记 C7 第 175 行）
  *   步骤 6：归一化
  *       - q_new = q_new / ‖q_new‖
- *   步骤 7：四元数转欧拉角
- *       - roll  = atan2(2(q0q2 - q1q3), 1-2(q2²+q3²))
- *       - pitch = asin(2(q0q1 - q2q3))
- *       - yaw   = atan2(2(q0q3 + q1q2), 1-2(q1²+q2²))
+ *   步骤 7：四元数转欧拉角（ZYX 顺序，q = C_b^e）
+ *       - pitch = asin(2(q0q2 - q1q3))
+ *       - yaw   = -atan2(2(q0q3 + q1q2), 1-2(q2²+q3²))   ← 罗盘方向，注意负号
+ *       - roll  = atan2(2(q0q1 + q2q3), 1-2(q1²+q2²))
  *       （笔记 C2 第二节）
  *
  * 公式汇总：
@@ -237,16 +249,17 @@ uint8_t IMU_Calib_Stage(void);
  *   - imu_dt 由定时器测量，确保积分精度
  */
 void IMU_Attitude_Update(void);
+void IMU_Sample_Missed(void);
 
 /**
  * @brief 四元数转欧拉角
  * @param q 输入四元数
  * @param e 输出欧拉角
  *
- * 公式（笔记 C2 第 88-91 行）：
- *   θ = arcsin(2ac + 2bd)
- *   ψ = atan2(2ad - 2bc, 1 - 2c² - 2d²)
- *   φ = atan2(2ab - 2cd, 1 - 2b² - 2c²)
+ * 公式（a=q0, b=q1, c=q2, d=q3，q = C_b^e）：
+ *   θ = arcsin(2ac - 2bd)
+ *   ψ = atan2(2ad + 2bc, 1 - 2c² - 2d²)
+ *   φ = atan2(2ab + 2cd, 1 - 2b² - 2c²)
  */
 void IMU_Quaternion_To_Euler(const Quaternion_t *q, EulerAngle_t *e);
 
@@ -255,9 +268,14 @@ void IMU_Quaternion_To_Euler(const Quaternion_t *q, EulerAngle_t *e);
  * @param e 输入欧拉角
  * @param q 输出四元数
  *
- * 公式（笔记 C2 第 185 行）：
- *   q = [cos(ψ/2)cos(θ/2)cos(φ/2) - sin(ψ/2)sin(θ/2)sin(φ/2), ...]
- *   （完整展开式见笔记）
+ * 公式（cφ = cos(φ/2)，其余同理；q = C_b^e）：
+ *   q0 = cφcθcψ + sφsθsψ
+ *   q1 = sφcθcψ - cφsθsψ
+ *   q2 = cφsθcψ + sφcθsψ
+ *   q3 = cφcθsψ - sφsθcψ
+ *
+ * 注意：ψ 要用 **-yaw/2**，因为 e->yaw 是罗盘方向（从北往东为正），
+ * 而地理系本身是从北往西为正，两者差一个负号（见 IMU_Quaternion_To_Euler）。
  *
  * 用途：校准时由初始 yaw 构造四元数
  */

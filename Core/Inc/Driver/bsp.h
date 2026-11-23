@@ -45,8 +45,9 @@ void HMC5883L_Init(void);
 void MS5611_PROM_Read(void);
 void All_Sensors_Init(void);
 
-void MPU6050_Read_Raw(void);
+uint8_t MPU6050_Read_Raw(void);
 void HMC5883L_Read_Raw(void);
+uint8_t HMC5883L_Data_Valid(void);
 void MS5611_Read_Raw(void);
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
 

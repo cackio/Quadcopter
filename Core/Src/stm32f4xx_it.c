@@ -58,6 +58,7 @@
 
 /* External variables --------------------------------------------------------*/
 extern TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim5;
 extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
 
@@ -229,6 +230,29 @@ void TIM2_IRQHandler(void)
   /* USER CODE BEGIN TIM2_IRQn 1 */
 
   /* USER CODE END TIM2_IRQn 1 */
+}
+
+/**
+  * @brief This function handles TIM5 global interrupt.
+  *
+  * 500 Hz 控制节拍。中断里只让 HAL 走一遍，真正的动作在
+  * HAL_TIM_PeriodElapsedCallback（main.c）里发信号量。
+  */
+void TIM5_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM5_IRQn 0 */
+
+  /* USER CODE END TIM5_IRQn 0 */
+
+  OSIntEnter();                     // ← ★ 通知 uC/OS-II 进入 ISR
+
+  HAL_TIM_IRQHandler(&htim5);
+
+  OSIntExit();                      // ← ★ 通知 uC/OS-II 退出 ISR
+
+  /* USER CODE BEGIN TIM5_IRQn 1 */
+
+  /* USER CODE END TIM5_IRQn 1 */
 }
 
 /**

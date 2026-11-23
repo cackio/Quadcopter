@@ -26,6 +26,7 @@
 
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim5;
 
 /* TIM2 init function */
 void MX_TIM2_Init(void)
@@ -125,6 +126,61 @@ void MX_TIM3_Init(void)
   /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
 
+}
+
+/**
+  * @brief TIM5 初始化：500Hz 基准节拍（2 ms）
+  *
+  * TIM5 挂在 APB1，定时器时钟 84 MHz：
+  *   f_cnt = 84 MHz / (83 + 1) = 1 MHz  →  1 个计数 = 1 us
+  *   f_irq = 1 MHz / (1999 + 1) = 500 Hz →  2 ms 一次更新中断
+  *
+  */
+void MX_TIM5_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  htim5.Instance = TIM5;
+  htim5.Init.Prescaler = 83;
+  htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim5.Init.Period = 1999;
+  htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim5, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim5, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief TIM5 底层初始化：开时钟 + 开中断
+  */
+void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
+{
+  if(tim_baseHandle->Instance==TIM5)
+  {
+    __HAL_RCC_TIM5_CLK_ENABLE();
+
+    /* 优先级必须是 4（= app_cfg.h 里的 CPU_CFG_KA_IPL_BOUNDARY）。
+     * uC/OS-II 的临界区是往 BASEPRI 写 4<<4=0x40，只有优先级数值 >= 4
+     * 的中断才会被屏蔽。设成 2 的话临界区挡不住它，而它里面又要
+     * OSSemPost 改就绪表，会和内核抢数据。
+     * 中断里只发一个信号量，真正的动作在任务里，所以 4 这一档够快。 */
+    HAL_NVIC_SetPriority(TIM5_IRQn, 4, 0);
+    HAL_NVIC_EnableIRQ(TIM5_IRQn);
+  }
 }
 
 void HAL_TIM_IC_MspInit(TIM_HandleTypeDef* tim_icHandle)

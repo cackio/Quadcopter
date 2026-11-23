@@ -189,7 +189,10 @@ void PID_PPM_to_Exp_Calc(void){
     expectation.roll = PID_To1(exp_roll, -1, 1, -EXP_ROLL_MAX, EXP_ROLL_MAX);
     expectation.pitch = PID_To1(exp_pitch, -1, 1, -EXP_PITCH_MAX, EXP_PITCH_MAX);
     /* 偏航取反：遥控器左拨(PPM=1000) → 期望角速度为正 → 机头左转。
-     * 正方向与 gyro_body.z 一致（右手定则，从机顶俯视逆时针）。*/
+     * 正方向与 gyro_body.z 一致（右手定则，从机顶俯视逆时针）。
+     * 注意：euler_angle.yaw 是罗盘方向（从北往东为正，俯视顺时针），
+     * 和 gyro_body.z 正好相反。这里用的是角速度，不受影响；
+     * 但以后如果改成偏航角环，反馈量必须取负。*/
     expectation.yaw = -PID_To1(exp_yaw, -1, 1, -EXP_YAW_RATE_MAX, EXP_YAW_RATE_MAX);
     expectation.thr = exp_thr;
     /* 这里用了归一化就不用再限幅了 */

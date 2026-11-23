@@ -1,6 +1,6 @@
 /**
  * @file    imu.c
- * @brief   传感器校准与姿态解算模块（严格按笔记 C2、C4~C7 实现）
+ * @brief   传感器校准与姿态解算模块
  *
  * 笔记对应关系：
  *   C2 四元数与欧拉角   -> IMU_Quaternion_To_Euler / IMU_Euler_To_Quaternion
@@ -9,7 +9,7 @@
  *   C6 梯度下降         -> IMU_Madgwick_Gradient 的重力部分
  *   C7 综合姿态解算     -> IMU_Attitude_Update（6×1 残差 + 4×6 雅可比）
  *
- * 坐标系与符号约定（与笔记一致，整份文件都按这一套写，切勿与学长代码混用）：
+ * 坐标系与符号约定：
  *   q = [q0, q1, q2, q3] = [a, b, c, d]，q0 为实部
  *   R_q = C_b^e（机体系 -> 地理系），C_e^b = R_qᵀ（地理系 -> 机体系）
  *   R_q 的元素（笔记 C2）：
@@ -51,7 +51,12 @@ MagCalib_t    mag_calib        = {0.0f, 0.0f, 0.0f,
                                   {{1.0f, 0.0f, 0.0f},
                                    {0.0f, 1.0f, 0.0f},
                                    {0.0f, 0.0f, 1.0f}}};
+uint8_t       mag_yaw_used     = 0;
 uint8_t       mag_calib_valid  = 0;
+/* 校准后地磁模长的参考值：椭球拟合把样本映到球面上，
+ * 这个值就是那个球的半径（接近 1 但不是正好 1）。
+ * 融合时用它判断“这一帧地磁是不是被干扰了”。 */
+static float  mag_norm_ref     = 0.0f;
 float         imu_dt           = IMU_DT_DEFAULT;
 
 /* ============================================================================
@@ -65,12 +70,14 @@ float         imu_dt           = IMU_DT_DEFAULT;
  *     降采样是为了避免转太快时把向心加速度混进重力测量。
  */
 #define CALIB_SAMPLE_SIZE       200u    /* 每组采样点数                  */
-#define CALIB_ROTATE_INTERVAL   5u      /* 翻转阶段每 5 次调用采一点(≈50ms) */
-#define CALIB_GYRO_MAX_RANGE    400.0f  /* 零偏采样时的静止判定(LSB，≈24°/s) */
+#define CALIB_GYRO_INTERVAL     5u      /* 陀螺采集降频：5 × 2 ms = 10 ms */
+#define CALIB_ROTATE_INTERVAL   25u     /* 翻转采集降频：25 × 2 ms = 50 ms */
+#define CALIB_GYRO_MAX_RANGE    100.0f  /* 零偏采样时的静止判定(LSB，≈6°/s) */
 
 static Vec3f_t  calib_accel_buf[CALIB_SAMPLE_SIZE];   /* 已归一化到 g */
 static Vec3f_t  calib_gyro_buf[CALIB_SAMPLE_SIZE];    /* 原始 LSB     */
 static Vec3f_t  calib_mag_buf[CALIB_SAMPLE_SIZE];     /* 原始 LSB     */
+static uint16_t calib_mag_cnt      = 0;
 static uint16_t calib_sample_cnt   = 0;
 static uint16_t calib_interval_cnt = 0;
 
@@ -223,6 +230,8 @@ void IMU_Calib_Init(void)
     calib_state        = CALIB_PENDING;
     calib_step         = CALIB_STEP_GYRO;
     calib_sample_cnt   = 0;
+    calib_mag_cnt      = 0;
+    mag_yaw_used       = 0;
     calib_interval_cnt = 0;
 
     accel_calib.offset_x = 0.0f;
@@ -243,6 +252,7 @@ void IMU_Calib_Init(void)
     mag_calib.soft_iron[1][0] = 0.0f; mag_calib.soft_iron[1][1] = 1.0f; mag_calib.soft_iron[1][2] = 0.0f;
     mag_calib.soft_iron[2][0] = 0.0f; mag_calib.soft_iron[2][1] = 0.0f; mag_calib.soft_iron[2][2] = 1.0f;
     mag_calib_valid = 0;
+    mag_norm_ref    = 0.0f;
 
     quaternion.w = 1.0f;
     quaternion.x = 0.0f;
@@ -256,6 +266,18 @@ void IMU_Calib_Init(void)
     imu_last_cycle = 0;
 }
 
+static void IMU_Align(float raw_x, float raw_y, float raw_z);
+
+void IMU_Sample_Missed(void)
+{
+    mag_yaw_used = 0;
+    imu_last_cycle = DWT->CYCCNT;   /* 丢失的时间里没有角速度可供积分 */
+    if (calib_step == CALIB_STEP_INIT || calib_step == CALIB_STEP_GYRO) {
+        calib_sample_cnt = 0;
+        calib_interval_cnt = 0;
+    }
+}
+
 void IMU_Calib_Update(void)
 {
     uint16_t i;
@@ -266,13 +288,19 @@ void IMU_Calib_Update(void)
     /* 校准流程共三段（每段都有 UART 提示，见 main.c 的 UartTask）：
      *   阶段 0：保持静止约 2 s   —— 200 点 × 10 ms，采陀螺零偏
      *   阶段 1：缓慢翻转约 10 s  —— 200 点 × 50 ms，采加计/地磁椭球样本
-     *   阶段 2：用最后一帧原始数据求初始 roll/pitch/yaw，然后置 CALIB_DONE
+     *   阶段 2：放稳后取平均值求初始姿态，然后置 CALIB_DONE
      * 注意：本函数与 IMU_Attitude_Update 互斥调用，校准期间不跑融合。
      */
     switch (calib_step)
     {
     /* ---------------- 步骤 1：静止采陀螺零偏 ---------------- */
     case CALIB_STEP_GYRO:
+        /* 降频到 10 ms 采一点：SensorTask 是 500Hz(2ms)，
+         * 不降频的话 200 点只要 0.4 s，平均出来的零偏抖动很大。 */
+        calib_interval_cnt++;
+        if (calib_interval_cnt < CALIB_GYRO_INTERVAL) break;
+        calib_interval_cnt = 0;
+
         if (calib_sample_cnt < CALIB_SAMPLE_SIZE) {
             calib_gyro_buf[calib_sample_cnt].x = (float)Gyro_X_RAW;
             calib_gyro_buf[calib_sample_cnt].y = (float)Gyro_Y_RAW;
@@ -295,7 +323,10 @@ void IMU_Calib_Update(void)
                 if (calib_gyro_buf[i].z < min_z) min_z = calib_gyro_buf[i].z;
                 if (calib_gyro_buf[i].z > max_z) max_z = calib_gyro_buf[i].z;
             }
-            if ((max_x - min_x) > CALIB_GYRO_MAX_RANGE ||
+            if (fabsf(max_x) > 20.0f * GYRO_LSB_PER_DPS || fabsf(min_x) > 20.0f * GYRO_LSB_PER_DPS ||
+                fabsf(max_y) > 20.0f * GYRO_LSB_PER_DPS || fabsf(min_y) > 20.0f * GYRO_LSB_PER_DPS ||
+                fabsf(max_z) > 20.0f * GYRO_LSB_PER_DPS || fabsf(min_z) > 20.0f * GYRO_LSB_PER_DPS ||
+                (max_x - min_x) > CALIB_GYRO_MAX_RANGE ||
                 (max_y - min_y) > CALIB_GYRO_MAX_RANGE ||
                 (max_z - min_z) > CALIB_GYRO_MAX_RANGE) {
                 still = 0;
@@ -317,7 +348,7 @@ void IMU_Calib_Update(void)
      *   - 加计样本先除以 8192 变成 g（C4 的椭球方程以 g 为单位）；
      *   - 地磁保持原始 LSB（C5 的椭球拟合对绝对量纲不敏感，
      *     但内部会做中心化/尺度归一化）。
-     * 每 5 次调用取 1 点：SensorTask 是 10 ms 周期，所以约 50 ms/点。
+     * 每 25 次调用取 1 点：SensorTask 是 2 ms 周期，所以约 50 ms/点。
      */
     case CALIB_STEP_ROTATE:
         calib_interval_cnt++;
@@ -329,26 +360,58 @@ void IMU_Calib_Update(void)
         calib_accel_buf[calib_sample_cnt].y = (float)Accel_Y_RAW / ACCEL_LSB_PER_G;
         calib_accel_buf[calib_sample_cnt].z = (float)Accel_Z_RAW / ACCEL_LSB_PER_G;
 
-        calib_mag_buf[calib_sample_cnt].x = (float)Mag_X_RAW;
-        calib_mag_buf[calib_sample_cnt].y = (float)Mag_Y_RAW;
-        calib_mag_buf[calib_sample_cnt].z = (float)Mag_Z_RAW;
+        if (HMC5883L_Data_Valid()) {
+            calib_mag_buf[calib_mag_cnt].x = (float)Mag_X_RAW;
+            calib_mag_buf[calib_mag_cnt].y = (float)Mag_Y_RAW;
+            calib_mag_buf[calib_mag_cnt].z = (float)Mag_Z_RAW;
+            calib_mag_cnt++;
+        }
 
         calib_sample_cnt++;
         if (calib_sample_cnt >= CALIB_SAMPLE_SIZE) {
             IMU_Accel_Calib_Fit(calib_accel_buf, CALIB_SAMPLE_SIZE, &accel_calib);
-            IMU_Mag_Calib_Fit(calib_mag_buf, CALIB_SAMPLE_SIZE, &mag_calib);
+            IMU_Mag_Calib_Fit(calib_mag_buf, calib_mag_cnt, &mag_calib);
             calib_step = CALIB_STEP_INIT;
             calib_sample_cnt = 0;
         }
         break;
 
     /* ---------------- 步骤 3：四元数初始化 ---------------- */
-    case CALIB_STEP_INIT:
-        IMU_Quaternion_Init();
+    case CALIB_STEP_INIT: {
+        static Vec3f_t sum;
+        float k = DEG_TO_RAD / GYRO_LSB_PER_DPS;
+        float ax = (float)Accel_X_RAW / ACCEL_LSB_PER_G;
+        float ay = (float)Accel_Y_RAW / ACCEL_LSB_PER_G;
+        float az = (float)Accel_Z_RAW / ACCEL_LSB_PER_G;
+        float a2 = ax * ax + ay * ay + az * az;
+
+        /* 放稳后每 10 ms 取一点，共 200 点，最后一帧翻转产生的加速度不能用来定水平。 */
+        if (a2 < 0.90f * 0.90f || a2 > 1.10f * 1.10f ||
+            fabsf(Gyro_X_RAW * k - gyro_calib.offset_x) > 1.5f * DEG_TO_RAD ||
+            fabsf(Gyro_Y_RAW * k - gyro_calib.offset_y) > 1.5f * DEG_TO_RAD ||
+            fabsf(Gyro_Z_RAW * k - gyro_calib.offset_z) > 1.5f * DEG_TO_RAD) {
+            calib_sample_cnt = 0;
+            break;
+        }
+        if (++calib_interval_cnt < CALIB_GYRO_INTERVAL) break;
+        calib_interval_cnt = 0;
+        if (calib_sample_cnt == 0) sum.x = sum.y = sum.z = 0.0f;
+        sum.x += Accel_X_RAW; sum.y += Accel_Y_RAW; sum.z += Accel_Z_RAW;
+        calib_gyro_buf[calib_sample_cnt].x = Gyro_X_RAW;
+        calib_gyro_buf[calib_sample_cnt].y = Gyro_Y_RAW;
+        calib_gyro_buf[calib_sample_cnt].z = Gyro_Z_RAW;
+        if (++calib_sample_cnt < CALIB_SAMPLE_SIZE) break;
+        IMU_Gyro_Calib_Fit(calib_gyro_buf, CALIB_SAMPLE_SIZE, &gyro_calib);
+        IMU_Align(sum.x / CALIB_SAMPLE_SIZE, sum.y / CALIB_SAMPLE_SIZE, sum.z / CALIB_SAMPLE_SIZE);
+        /* 校准这 12 s 里没人调用过 IMU_Attitude_Update，imu_last_cycle 还是旧的。
+         * 这里对齐一下，否则融合的第一帧 dt 会被算成几十毫秒，
+         * 一步把刚初始化好的姿态推歪（再靠梯度慢慢拉回来，看着就是“上电先歪一下”）。 */
+        imu_last_cycle = DWT->CYCCNT;
         calib_step  = CALIB_STEP_FINISH;
         calib_state = CALIB_DONE;
         break;
 
+    }
     default:
         calib_state = CALIB_DONE;
         break;
@@ -364,6 +427,7 @@ uint8_t IMU_Calib_Stage(void)
 {
     if (calib_state == CALIB_DONE) return 2u;
     if (calib_step == CALIB_STEP_GYRO) return 0u;
+    if (calib_step == CALIB_STEP_INIT) return 3u;
     return 1u;
 }
 
@@ -456,15 +520,18 @@ void IMU_Accel_Calib_Fit(const Vec3f_t *samples, uint16_t count, AccelCalib_t *c
     calib->scale_y  = sqrtf(theta[1] * d);
     calib->scale_z  = sqrtf(theta[2] * d);
 
-    /* 合理性检查：不合理的拟合结果直接退回默认值，避免 NaN 传播 */
+    /* 合理性检查：不合理的拟合结果直接退回默认值，避免 NaN 传播。
+     * 阈值按 MPU6050 实际水平给：零偏一般 < 0.1 g，刻度误差几个百分点。
+     * 原来放宽到 3 g / 0.2~5 倍，等于什么都不拦 —— 椭球拟合一旦因为
+     * “翻转时没转够姿态”给出 0.3 g 的假零偏，静止姿态就会被永久偏掉几度。 */
     if (!IMU_Finite(calib->offset_x) || !IMU_Finite(calib->offset_y) ||
         !IMU_Finite(calib->offset_z) || !IMU_Finite(calib->scale_x)  ||
         !IMU_Finite(calib->scale_y)  || !IMU_Finite(calib->scale_z)  ||
-        fabsf(calib->offset_x) > 3.0f || fabsf(calib->offset_y) > 3.0f ||
-        fabsf(calib->offset_z) > 3.0f ||
-        calib->scale_x < 0.2f || calib->scale_x > 5.0f ||
-        calib->scale_y < 0.2f || calib->scale_y > 5.0f ||
-        calib->scale_z < 0.2f || calib->scale_z > 5.0f)
+        fabsf(calib->offset_x) > 0.3f || fabsf(calib->offset_y) > 0.3f ||
+        fabsf(calib->offset_z) > 0.3f ||
+        calib->scale_x < 0.8f || calib->scale_x > 1.2f ||
+        calib->scale_y < 0.8f || calib->scale_y > 1.2f ||
+        calib->scale_z < 0.8f || calib->scale_z > 1.2f)
     {
         calib->offset_x = 0.0f; calib->offset_y = 0.0f; calib->offset_z = 0.0f;
         calib->scale_x  = 1.0f; calib->scale_y  = 1.0f; calib->scale_z  = 1.0f;
@@ -537,7 +604,7 @@ void IMU_Mag_Calib_Fit(const Vec3f_t *samples, uint16_t count, MagCalib_t *calib
     calib->soft_iron[2][0] = 0.0f; calib->soft_iron[2][1] = 0.0f; calib->soft_iron[2][2] = 1.0f;
     mag_calib_valid = 0;
 
-    if (count < 9u) return;
+    if (count < 30u) return;
 
     /* ---- 数据中心化：均值当作粗硬铁中心 ---- */
     for (i = 0; i < count; i++) {
@@ -578,6 +645,17 @@ void IMU_Mag_Calib_Fit(const Vec3f_t *samples, uint16_t count, MagCalib_t *calib
             for (k = 0; k < 9u; k++) JTJ[j][k] += row[j] * row[k];
             JTr[j] += row[j];
         }
+    }
+
+    /* 检查样本在三个方向上是否都有厚度。均匀球面的比值为 1，
+     * 只在桌上转圈时，即使残差很小，三个方向围成的体积也接近 0。 */
+    {
+        float xx = JTJ[6][6], yy = JTJ[7][7], zz = JTJ[8][8];
+        float xy = JTJ[6][7], xz = JTJ[6][8], yz = JTJ[7][8];
+        float avg = (xx + yy + zz) / 3.0f;
+        float volume = xx * (yy * zz - yz * yz) - xy * (xy * zz - yz * xz)
+                     + xz * (xy * yz - yy * xz);
+        if (!(volume > 0.02f * avg * avg * avg)) return;
     }
 
     trace = JTJ[0][0] + JTJ[1][1] + JTJ[2][2];
@@ -715,6 +793,42 @@ void IMU_Mag_Calib_Fit(const Vec3f_t *samples, uint16_t count, MagCalib_t *calib
         for (k = 0; k < 3u; k++)
             if (!IMU_Finite(calib->soft_iron[j][k])) return;
 
+    /* ------------------------------------------------------------------------
+     * 拟合残差检查（这一步是判断“这套地磁参数到底能不能用”的唯一依据）
+     *
+     * 校准后的样本应该全部落在一个球面上：|A(m-b)| = 常数。
+     * 先量出这个半径当参考值 mag_norm_ref，再看各样本相对它的离散程度。
+     * 离散超过 25% 说明采样姿态不够（比如只在一个平面里转了转），
+     * 解出来的椭球是外推的，拿去修偏航会把偏航带跑。
+     * 这种情况干脆不置 valid，融合自动退回六轴：偏航会慢慢漂，
+     * 但滚转俯仰和偏航不会互相打架。
+     * ------------------------------------------------------------------------ */
+    {
+        float sum = 0.0f, sum2 = 0.0f, mean, var;
+        uint16_t mi;
+
+        for (mi = 0; mi < count; mi++) {
+            float dx = samples[mi].x - calib->offset_x;
+            float dy = samples[mi].y - calib->offset_y;
+            float dz = samples[mi].z - calib->offset_z;
+            float nx = calib->soft_iron[0][0]*dx + calib->soft_iron[0][1]*dy + calib->soft_iron[0][2]*dz;
+            float ny = calib->soft_iron[1][0]*dx + calib->soft_iron[1][1]*dy + calib->soft_iron[1][2]*dz;
+            float nz = calib->soft_iron[2][0]*dx + calib->soft_iron[2][1]*dy + calib->soft_iron[2][2]*dz;
+            float n  = sqrtf(nx*nx + ny*ny + nz*nz);
+
+            sum  += n;
+            sum2 += n * n;
+        }
+
+        mean = sum / (float)count;
+        var  = sum2 / (float)count - mean * mean;
+
+        if (!(mean > 0.05f) || var > 0.0625f * mean * mean) {
+            return;
+        }
+        mag_norm_ref = mean;
+    }
+
     mag_calib_valid = 1;
 }
 
@@ -722,7 +836,19 @@ void IMU_Mag_Calib_Fit(const Vec3f_t *samples, uint16_t count, MagCalib_t *calib
  *  四元数初始化
  * ========================================================================== */
 
+static uint8_t IMU_Mag_Trusted(float norm)
+{
+    return IMU_USE_MAG && mag_calib_valid && HMC5883L_Data_Valid() &&
+           norm > IMU_MAG_MIN_RATIO * mag_norm_ref &&
+           norm < IMU_MAG_MAX_RATIO * mag_norm_ref;
+}
+
 void IMU_Quaternion_Init(void)
+{
+    IMU_Align(Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW);
+}
+
+static void IMU_Align(float raw_x, float raw_y, float raw_z)
 {
     /* ------------------------------------------------------------------------
      * 初始 roll / pitch（笔记 C4 + C2）
@@ -737,9 +863,9 @@ void IMU_Quaternion_Init(void)
      *     pitch θ = asin(-ax)
      * 横滚/俯仰由加计一次给准，后续 Madgwick 主要只需要修 yaw。
      * ------------------------------------------------------------------------ */
-    float ax = accel_calib.scale_x * ((float)Accel_X_RAW / ACCEL_LSB_PER_G - accel_calib.offset_x);
-    float ay = accel_calib.scale_y * ((float)Accel_Y_RAW / ACCEL_LSB_PER_G - accel_calib.offset_y);
-    float az = accel_calib.scale_z * ((float)Accel_Z_RAW / ACCEL_LSB_PER_G - accel_calib.offset_z);
+    float ax = accel_calib.scale_x * (raw_x / ACCEL_LSB_PER_G - accel_calib.offset_x);
+    float ay = accel_calib.scale_y * (raw_y / ACCEL_LSB_PER_G - accel_calib.offset_y);
+    float az = accel_calib.scale_z * (raw_z / ACCEL_LSB_PER_G - accel_calib.offset_z);
     float mx0 = (float)Mag_X_RAW - mag_calib.offset_x;
     float my0 = (float)Mag_Y_RAW - mag_calib.offset_y;
     float mz0 = (float)Mag_Z_RAW - mag_calib.offset_z;
@@ -768,21 +894,23 @@ void IMU_Quaternion_Init(void)
      * 融合时地磁参考被固定为 b' = [√(hx²+hy²), 0, hz]，等价于“地理系 x 轴 = 磁北”。
      * 水平放置时（roll=pitch=0），机体系下的地磁水平分量为
      *     m_h = B·[cosα, sinα]ᵀ（α 为机体系下磁北方向角）
-     * 收敛不动点要求 h = R_qᵀ m 的水平分量落在 +x 上，反解即
+     * 收敛不动点要求 h = R_q m 的水平分量落在 +x 上，反解即
      *     ψ = atan2(-my, mx)
      *
-     * 注意：这里没有做倾斜补偿（没有先用 roll/pitch 旋转 m），
-     * 所以只是近似初值；Madgwick 的梯度项会在 1~2 s 内把它收敛到正确值。
+     * 先用初始 roll/pitch 把磁场转到水平面，再取方向角。
+     * 对外的罗盘 yaw 与内部 ψ 符号相反（见欧拉角转换函数）。
      * ------------------------------------------------------------------------ */
     e.roll  = roll;
     e.pitch = pitch;
-    if (IMU_Finite(mx) && IMU_Finite(my) && (mx * mx + my * my) > 1.0e-6f) {
-        e.yaw = atan2f(-my, mx);
-    } else {
-        e.yaw = 0.0f;
+    e.yaw   = 0.0f;
+    if (IMU_Mag_Trusted(sqrtf(mx * mx + my * my + mz * mz))) {
+        float vertical = sinf(roll) * my + cosf(roll) * mz;
+        float hx = cosf(pitch) * mx + sinf(pitch) * vertical;
+        float hy = cosf(roll) * my - sinf(roll) * mz;
+        if (IMU_Finite(hx) && IMU_Finite(hy) && hx * hx + hy * hy > 0.01f * mag_norm_ref * mag_norm_ref)
+            e.yaw = atan2f(hy, hx);
     }
 
-    (void)mz;
     IMU_Euler_To_Quaternion(&e, &quaternion);
 
     /* 初始姿态角同步输出 */
@@ -808,7 +936,7 @@ void IMU_Attitude_Update(void)
     float grad[4];
     Vec3f_t a, m;
     float an, mn;
-    uint8_t use_mag;
+    uint8_t use_mag, acc_ok, mag_ok;
     float beta;
     float q0n, q1n, q2n, q3n, qn;
 
@@ -878,23 +1006,28 @@ void IMU_Attitude_Update(void)
     dq2 = 0.5f * ( q0 * wy - q1 * wz + q3 * wx);
     dq3 = 0.5f * ( q0 * wz + q1 * wy - q2 * wx);
 
-    /* ---- 步骤 4：∇E = Jᵀf（加计 3 + 地磁 3 = 6×1 残差，笔记 C6/C7）----
-     *   f = [ v - a ; w - m ]，目标函数 E = ½ fᵀf，梯度 ∇E = Jᵀf。
-     *   雅可比展开全部写在 IMU_Madgwick_Gradient 函数头注释里。
-     *   加计无效（an ≤ 0.1 g，说明在剧烈机动或掉落）时不做修正。
-     *   地磁必须同时满足三个条件才参与修正：
-     *     1) IMU_USE_MAG 打开（imu.h 里一行宏，切六轴就置 0）；
-     *     2) mag_calib_valid = 1，即椭球拟合成功过。拟合失败时 offset 全是 0、
-     *        软铁矩阵是单位阵，此时读回来的 m 只是个方向大致对的原始向量，
-     *        拿它去修姿态会把滚转/俯仰一起带歪；
-     *     3) mn > 0.01，排除 I2C 读失败留下的全零数据。
-     *   三个条件缺一个就退化成只有重力的 3×1 残差（六轴）。
+    /* ---- 步骤 3.5：判断这一帧的加计/地磁可不可信 ----
+     * 加计：只有合加速度在 0.85~1.15 g 时，它的方向才等于重力方向。
+     *   原来只判 an > 0.1，猛转时 3~4 g 的向心加速度也被当重力用，
+     *   姿态被拽歪后要好几秒才拉回来 —— 就是“猛转几下以后平放不平”。
+     * 地磁：模长必须在标定时量到的值附近；而且只在加计可信时才修偏航，
+     *   加计都不可信说明姿态本身不可信，再拿它去对地磁只会互相打架。
      */
-    use_mag = (IMU_USE_MAG && mag_calib_valid && (mn > 0.01f)) ? 1u : 0u;
+    acc_ok = (an > IMU_ACCEL_MIN_G && an < IMU_ACCEL_MAX_G) ? 1u : 0u;
 
+    mag_ok = IMU_Mag_Trusted(mn);
+
+    use_mag = (acc_ok && mag_ok) ? 1u : 0u;
+
+    /* ---- 步骤 4：∇E = Jᵀf（只走重力那一路）----
+     * 地磁不再进这里：四元数梯度的 4 个分量是耦合的，
+     * 地磁参考哪怕只偏一点，也会顺带把滚转俯仰拉出误差。
+     * 这里只保留重力的 3×1 残差 f = v - a，让滚转俯仰完全由重力唯一决定。
+     * 偏航在步骤 5.5 单独用绕地理系 z 轴旋转的方式修。
+     */
     g0 = 0.0f; g1 = 0.0f; g2 = 0.0f; g3 = 0.0f;
-    if (an > 0.1f) {
-        IMU_Madgwick_Gradient(&quaternion, &a, &m, use_mag, grad);
+    if (acc_ok) {
+        IMU_Madgwick_Gradient(&quaternion, &a, &m, 0u, grad);
         g0 = grad[0];
         g1 = grad[1];
         g2 = grad[2];
@@ -904,8 +1037,9 @@ void IMU_Attitude_Update(void)
     /* ---- 步骤 5：融合更新（笔记 C7 第 175 行）----
      *     q_t = q_{t-1} + ( q̇_ω − β·∇E/‖∇E‖ ) · Δt
      * 先归一化 ∇E，保证不同姿态下修正步长量级一致；
-     * 陀螺项负责高频响应，梯度项负责把长期漂移拉回重力方向与磁北。
-     * β = IMU_BETA_DEFAULT = 0.1，对应 100 Hz 采样。
+     * 陀螺项负责高频响应，梯度项负责把长期漂移拉回重力方向。
+     * β = 0.02，和 Quadxie 同一档：修正速度约 2°/s，
+     * 既能压住陀螺零偏，又不会被加计的振动噪声带着抖。
      */
     beta = IMU_BETA_DEFAULT;
     gn = sqrtf(g0 * g0 + g1 * g1 + g2 * g2 + g3 * g3);
@@ -915,10 +1049,49 @@ void IMU_Attitude_Update(void)
         g0 = 0.0f; g1 = 0.0f; g2 = 0.0f; g3 = 0.0f;
     }
 
+    /* 转停后加快回正；接近水平参考时按残差减小步长，避免在零点来回抖。 */
+    if (acc_ok && fabsf(an - 1.0f) < 0.04f &&
+        wx * wx + wy * wy + wz * wz < (3.0f * DEG_TO_RAD) * (3.0f * DEG_TO_RAD)) {
+        beta = IMU_Clamp(gn, 0.0f, 0.15f);
+    }
+
     q0n = q0 + (dq0 - beta * g0) * dt;
     q1n = q1 + (dq1 - beta * g1) * dt;
     q2n = q2 + (dq2 - beta * g2) * dt;
     q3n = q3 + (dq3 - beta * g3) * dt;
+
+    /* ---- 步骤 5.5：地磁单独修偏航 ----
+     * 把地磁转到地理系：h = R_q · m（只要水平的两分量）。
+     * 我们希望水平分量对准 +x（磁北），它的方位角 θ = atan2(hy, hx) 就是偏差。
+     * 让整机绕地理系 z 轴再转 δ 角，θ 会变成 θ + δ，所以取 δ = -K·θ·Δt。
+     * 用左乘四元数的 q_z(δ) ⊗ q 实现：只改偏航，
+     * 滚转俯仰一个分量都不动，地磁再不准也带不歪水平。
+     * θ 限幅 ±0.25 rad（约 ±14°）：真被铁器干扰时，偏航最多按
+     * K×14°/s 的速度慢慢拉，不会被一下拽飞。
+     */
+    mag_yaw_used = 0;
+    if (use_mag) {
+        float hx = (1.0f - 2.0f * (q2 * q2 + q3 * q3)) * mx
+                 + 2.0f * (q1 * q2 - q0 * q3) * my
+                 + 2.0f * (q1 * q3 + q0 * q2) * mz;
+        float hy = 2.0f * (q1 * q2 + q0 * q3) * mx
+                 + (1.0f - 2.0f * (q1 * q1 + q3 * q3)) * my
+                 + 2.0f * (q2 * q3 - q0 * q1) * mz;
+        float err  = IMU_Clamp(atan2f(hy, hx), -0.25f, 0.25f);
+        float dpsi = -IMU_YAW_K * err * dt;
+
+        if (IMU_Finite(dpsi) && hx * hx + hy * hy > 0.01f * mag_norm_ref * mag_norm_ref) {
+            float c = cosf(dpsi * 0.5f);
+            float s = sinf(dpsi * 0.5f);
+            float w0 = c * q0n - s * q3n;
+            float w1 = c * q1n - s * q2n;
+            float w2 = c * q2n + s * q1n;
+            float w3 = c * q3n + s * q0n;
+
+            mag_yaw_used = 1;
+            q0n = w0; q1n = w1; q2n = w2; q3n = w3;
+        }
+    }
 
     /* ---- 步骤 6：强制归一化（C7 明确要求）----
      *   一阶欧拉积分会让模长缓慢偏离 1；
@@ -975,8 +1148,16 @@ void IMU_Quaternion_To_Euler(const Quaternion_t *q, EulerAngle_t *e)
     sin_pitch = IMU_Clamp(sin_pitch, -1.0f, 1.0f);
 
     e->pitch = asinf(sin_pitch);
-    e->yaw   = atan2f(2.0f * (q0 * q3 + q1 * q2),
-                      1.0f - 2.0f * (q2 * q2 + q3 * q3));
+    /* 偏航角整体取负。
+     * 本文件的地理系是由加计的 +1g 方向定义的：静止时加计读数指向哪，
+     * 地理系 +z 就指向哪。MPU6050 贴片朝上放置时这个轴朝上，
+     * 所以实际是 x=北、y=西、z=上（右手系）。
+     * 绕这个 z 轴的正方向是“从北往西”（从机顶俯视逆时针），
+     * 而罗盘和遥控器的习惯是“从北往东为正”。
+     * 两边差一个负号，所以这里取反；滚转俯仰由重力唯一确定，不受影响。
+     * 注意：改这里必须同步改 IMU_Euler_To_Quaternion 的 ψ，否则两者不再互逆。 */
+    e->yaw   = -atan2f(2.0f * (q0 * q3 + q1 * q2),
+                       1.0f - 2.0f * (q2 * q2 + q3 * q3));
     e->roll  = atan2f(2.0f * (q0 * q1 + q2 * q3),
                       1.0f - 2.0f * (q1 * q1 + q2 * q2));
 }
@@ -999,7 +1180,9 @@ void IMU_Euler_To_Quaternion(const EulerAngle_t *e, Quaternion_t *q)
      * ------------------------------------------------------------------------ */
     float phi   = e->roll  * 0.5f;
     float theta = e->pitch * 0.5f;
-    float psi   = e->yaw   * 0.5f;
+    /* e->yaw 是“从北往东为正”的罗盘方向，地理系本身是“从北往西为正”，
+     * 所以还原成四元数时要把符号翻回去，保持和 IMU_Quaternion_To_Euler 互逆。 */
+    float psi   = -e->yaw   * 0.5f;
 
     float cphi = cosf(phi),   sphi = sinf(phi);
     float ctheta = cosf(theta), stheta = sinf(theta);

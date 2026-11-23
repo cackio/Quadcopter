@@ -53,22 +53,28 @@
 #define UART_TASK_STK_SIZE     512   /* 2 KB，含 char data[220] 和 snprintf 的临时空间 */
 #define BARO_TASK_STK_SIZE     256   /* 1 KB，只有 MS5611_Read_Raw */
 #define START_TASK_STK_SIZE    384   /* 1.5 KB，含 BSP_Init + 创建三个任务 */
-#define PIDSHELL_TASK_SIZE     256
-#define PIDCORE_TASK_SIZE      256
+#define PIDSHELL_TASK_STK_SIZE     256   /* 1 KB，外环只有几次浮点运算 */
+#define PIDCORE_TASK_STK_SIZE      256   /* 1 KB，内环只有几次浮点运算 */
 
 #define START_TASK_PRIO        5
-#define PIDSHELL_TASK_PRIO     6
-#define PIDCORE_TASK_PRIO      7
-#define SENSOR_TASK_PRIO       8
+#define SENSOR_TASK_PRIO       6     
+#define PIDSHELL_TASK_PRIO     7     
+#define PIDCORE_TASK_PRIO      8     
 #define UART_TASK_PRIO         9
 #define BARO_TASK_PRIO         10
 
-/* 每个任务的周期（单位：tick） 当前tick为10ms */
-#define SENSOR_TASK_PERIOD    1
+/* 慢任务周期（单位：tick） 当前 tick = 10ms
+ * 采样/解算/内外环已经不看 tick 了，由 TIM5 的 2ms 中断驱动，见 SensorTask。 */
 #define UART_TASK_PERIOD      5
-#define PIDSHELL_TASK_PERIOD  4
-#define PIDCORE_TASK_PERIOD   1
 #define BARO_TASK_PERIOD      20   /* 200ms */
+
+/* 500Hz 节拍的分频：
+ *   SensorTask 由 TIM5 每 2ms 唤醒一次；
+ *   地磁每 10 拍读一次 = 50Hz（HMC5883L 本身只有 75Hz 输出，读快了是重复值）；
+ *   外环每 5 拍跑一次 = 10ms（100Hz）。
+ */
+#define MAG_READ_DIV          10
+#define OUTER_LOOP_DIV        5
 
 /* USER CODE END PD */
 
@@ -83,36 +89,104 @@ OS_STK StartTaskStk[START_TASK_STK_SIZE];
 OS_STK SensorTaskStk[SENSOR_TASK_STK_SIZE];
 OS_STK UartTaskStk[UART_TASK_STK_SIZE];
 OS_STK BaroTaskStk[BARO_TASK_STK_SIZE];
-OS_STK PIDShellTaskStk[PIDSHELL_TASK_SIZE];
-OS_STK PIDCoreTaskStk[PIDCORE_TASK_SIZE];
+OS_STK PIDShellTaskStk[PIDSHELL_TASK_STK_SIZE];
+OS_STK PIDCoreTaskStk[PIDCORE_TASK_STK_SIZE];
+
+/*
+ * 三个节拍信号量，把 2ms 中断串成一条链：
+ *
+ *   TIM5(2ms) --SensorSem--> SensorTask   采样 + 姿态解算
+ *                                   |
+ *                                   +--CoreSem--> PIDCoreTask   内环 2ms
+ *
+ *   TIM5 每第 5 拍另外发一次 ShellSem --> PIDShellTask  外环 10ms
+ *
+ * 外环任务优先级(7)高于内环(8)：第 5 拍时两个任务同时就绪，
+ * 外环先跑完、把 exp_w 更新掉，然后自己阻塞在 ShellSem 上，
+ * 内环才被调度到，拿到的就是这一拍刚算出来的角速度期望。
+ */
+OS_EVENT *SensorSem;
+OS_EVENT *ShellSem;
+OS_EVENT *CoreSem;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
 void SystemClock_Config(void);
 void StartTask(void *p_arg);
+void SensorTask(void *p_arg);
+void PIDShellTask(void *p_arg);
+void PIDCoreTask(void *p_arg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
 
+/*
+ * TIM5 更新中断回调：只发信号量，不做别的。
+ * 放在这里而不是 tim.c，是因为它要用 uC/OS-II 的信号量，属于应用层。
+ *
+ * 每 2ms 发一次 SensorSem（采样+姿态）；
+ * 每第 5 次再发一次 ShellSem，也就是外环精确 10ms 一拍。
+ * 用中断里自己数拍，而不是让外环任务 OSTimeDly，是因为
+ * OSTimeDly 是“相对延时”，实际周期 = 10ms + 任务执行时间，会慢慢漂。
+ */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    static uint8_t tick_div = 0;
+
+    if (htim->Instance == TIM5)
+    {
+        OSSemPost(SensorSem);
+
+        if (++tick_div >= OUTER_LOOP_DIV)
+        {
+            tick_div = 0;
+            OSSemPost(ShellSem);
+        }
+    }
+}
+
 void SensorTask(void *p_arg)
 {
+    INT8U   err;
+    uint8_t mag_div = 0;   /* 地磁降频计数：10 拍读一次 = 50Hz */
+
     (void)p_arg;
 
     while (1)
     {
         /*
-         * 姿态通道：MPU6050 + HMC5883L 每个周期都读，
-         * 校准期间走校准状态机，校准完成后走 Madgwick 姿态解算。
-         * 气压计不放在这个循环里：MS5611_Read_Raw 内部有两段 HAL_Delay(10)，
-         * 每 200ms 会把姿态采样卡停 20ms，这一段时间的角速度是补不回来的。
-         * 已经挪到下面的 BaroTask，它优先级最低，卡住也只影响它自己。
+         * 等 TIM5 的 500Hz 节拍（2ms）。
+         * 后面用 OSSemAccept 把积压的节拍清掉：万一某一拍超时，
+         * 只补跑一次，不会越积越多、最后变成一串 dt≈0 的空转。
+         * （不能用 OSSemPend(…,0,…) 来清，timeout=0 是“永久等待”，会卡死）
          */
-        MPU6050_Read_Raw();
-        HMC5883L_Read_Raw();
+        OSSemPend(SensorSem, 0, &err);
+        while (OSSemAccept(SensorSem) > 0)
+        {
+            /* 只为清计数 */
+        }
 
+        /*
+         * 1) 采样：MPU6050 每拍都读（2ms 一个新样本），
+         *    地磁降频到 50Hz —— HMC5883L 输出率只有 75Hz，读快了是同一个值。
+         *    气压计不在这里：MS5611_Read_Raw 内含两段 HAL_Delay(10)，
+         *    放进 2ms 循环会直接把周期撑爆，它已经挪到 BaroTask。
+         */
+        if (!MPU6050_Read_Raw()) {
+            IMU_Sample_Missed();
+            OSSemPost(CoreSem);   /* 保持内环节拍，姿态保持在最近一次有效值 */
+            continue;
+        }
+        if (++mag_div >= MAG_READ_DIV)
+        {
+            mag_div = 0;
+            HMC5883L_Read_Raw();
+        }
+
+        /* 2) 姿态：校准期间走状态机，校准完成后走 Madgwick 融合 */
         if (IMU_Calib_Done())
         {
             IMU_Attitude_Update();
@@ -122,18 +196,74 @@ void SensorTask(void *p_arg)
             IMU_Calib_Update();
         }
 
-        /*
-         * 1 tick = 10ms（OS_TICKS_PER_SEC = 100），姿态更新 100Hz。
-         * imu_dt 由 DWT 实测，周期抖动不会影响积分精度。
-         */
-        OSTimeDly(SENSOR_TASK_PERIOD);
+        /* 3) 解算完再放内环这一拍的车：内环读到的就是刚更新的姿态 */
+        OSSemPost(CoreSem);
+    }
+}
+
+/*
+ * 外环任务：10ms 一拍，由 TIM5 每第 5 拍发的 ShellSem 唤醒。
+ * 遥控器期望 → 角度误差 → exp_w 角速度期望。
+ * 优先级比内环高，所以第 5 拍能先于内环跑完。
+ */
+void PIDShellTask(void *p_arg)
+{
+    INT8U err;
+
+    (void)p_arg;
+
+    while (1)
+    {
+        OSSemPend(ShellSem, 0, &err);
+        while (OSSemAccept(ShellSem) > 0)
+        {
+            /* 只为清计数 */
+        }
+
+        PID_PPM_to_Exp_Calc();                  /* 遥控器期望值计算 */
+        PID_FlyMode_Update(expectation.thr);    /* 更新飞行模式 */
+
+        if (PID_SHELL_MODE)
+        {
+            /* 通过四元数计算 */
+            PID_Cascade_Shell_Calc_Quater();
+        }
+        else
+        {
+            /* 通过姿态角计算 */
+            exp_w.roll  = PID_Cascade_Shell_Calc(expectation.roll  - euler_angle.roll  * RAD_TO_DEG, &roll_shell);
+            exp_w.pitch = PID_Cascade_Shell_Calc(expectation.pitch - euler_angle.pitch * RAD_TO_DEG, &pitch_shell);
+        }
+    }
+}
+
+/*
+ * 内环任务：2ms 一拍，由 SensorTask 在姿态解算完以后放行。
+ * 角速度环 → 混控 → 写 PWM。
+ */
+void PIDCoreTask(void *p_arg)
+{
+    INT8U err;
+
+    (void)p_arg;
+
+    while (1)
+    {
+        OSSemPend(CoreSem, 0, &err);
+        while (OSSemAccept(CoreSem) > 0)
+        {
+            /* 只为清计数 */
+        }
+
+        PID_Motor_Calc();
+        PID_Motor_Output();
     }
 }
 
 /*
  * 气压计任务：和姿态彻底解耦，200ms 读一次。
  * 里面约 20ms 的阻塞（HAL_Delay 等 ADC 转换）只会占空闲时间，
- * 不影响 SensorTask 的 100Hz 姿态采样。
+ * 不影响 SensorTask 的 500Hz 姿态采样。
  */
 void BaroTask(void *p_arg)
 {
@@ -152,7 +282,7 @@ void UartTask(void *p_arg)
     static uint8_t last_stage = 0xFF;
     static uint8_t txt_div = 0;      /* 文本日志分频：20 × 50ms = 1s */
     static uint8_t led_div = 0;      /* LED 心跳分频：10 × 50ms = 0.5s */
-    uint8_t stage;
+    uint8_t stage, mag_fit, mag_used;
 
     int16_t ax, ay, az;
     int16_t gx, gy, gz;
@@ -196,6 +326,10 @@ void UartTask(void *p_arg)
             {
                 msg = "CALIB: rotate the board SLOWLY in all directions (10s)...\r\n";
             }
+            else if (stage == 3)
+            {
+                msg = "CALIB: set the board down and keep STILL...\r\n";
+            }
             else
             {
                 msg = "CALIB DONE. Attitude running.\r\n";
@@ -238,6 +372,8 @@ void UartTask(void *p_arg)
             gy = Gyro_Y_RAW;
             gz = Gyro_Z_RAW;
 
+            mag_fit  = mag_calib_valid;
+            mag_used = mag_yaw_used;
             mx = Mag_X_RAW;
             my = Mag_Y_RAW;
             mz = Mag_Z_RAW;
@@ -252,7 +388,7 @@ void UartTask(void *p_arg)
             yaw_deg   = euler_angle.yaw   * RAD_TO_DEG;
 
             /* 折算成 °/s 和 ms，方便直接和手上的动作对比：
-             * 转 90°/s 时这里应该读到 90 左右，dt 应该稳定在 10 ms 附近。 */
+             * 转 90°/s 时这里应该读到 90 左右，dt 应该稳定在 2.0 ms 附近。 */
             gx_dps = gyro_body.x * RAD_TO_DEG;
             gy_dps = gyro_body.y * RAD_TO_DEG;
             gz_dps = gyro_body.z * RAD_TO_DEG;
@@ -265,7 +401,7 @@ void UartTask(void *p_arg)
                      "Euler:%d,%d,%d\r\n"
                      "Accel:%d,%d,%d\r\n"
                      "Gyro:%d,%d,%d\r\n"
-                     "Mag:%d,%d,%d\r\n"
+                     "Mag:%d,%d,%d fit:%u used:%u\r\n"
                      "Rate:%.0f,%.0f,%.0f dps  dt:%.1fms\r\n"
                      "Pre_RAW:%lu Tem_RAW:%lu\r\n\r\n",
                      throttle,
@@ -273,7 +409,7 @@ void UartTask(void *p_arg)
                      (int)roll_deg, (int)pitch_deg, (int)yaw_deg,
                      ax, ay, az,
                      gx, gy, gz,
-                     mx, my, mz,
+                     mx, my, mz, (unsigned)mag_fit, (unsigned)mag_used,
                      gx_dps, gy_dps, gz_dps, dt_ms,
                      (unsigned long)p_raw,
                      (unsigned long)t_raw);
@@ -308,36 +444,6 @@ void UartTask(void *p_arg)
     }
 }
 
-void PIDShellTask(void *p_arg){
-
-    while(1) {
-
-      PID_PPM_to_Exp_Calc();      // 遥控器期望值计算
-      PID_FlyMode_Update(expectation.thr);    // 更新飞行模式.油门期望值只在外环监测期望值后发生变化，所以只在这里用就行
-      if(PID_SHELL_MODE){
-          /* 通过四元数计算 */
-          PID_Cascade_Shell_Calc_Quater();  //外环计算通过修改全局变量exp_w角速度期望值输出
-      }else{
-          /* 通过姿态角计算 */
-          exp_w.roll  = PID_Cascade_Shell_Calc(expectation.roll  - euler_angle.roll  * RAD_TO_DEG, &roll_shell);
-          exp_w.pitch = PID_Cascade_Shell_Calc(expectation.pitch - euler_angle.pitch * RAD_TO_DEG, &pitch_shell);
-      }
-      
-
-      OSTimeDly(PIDSHELL_TASK_PERIOD);
-    }
-}
-
-void PIDCoreTask(void *p_arg){
-
-    while(1) {
-
-      PID_Motor_Calc();           // 电机混控输出计算，这里会调用计算PID内环
-      PID_Motor_Output();         // 电机输出配置
-
-      OSTimeDly(PIDCORE_TASK_PERIOD);
-    }
-}
 /* USER CODE END 0 */
 
 
@@ -362,6 +468,7 @@ int main(void)
     MX_USART1_UART_Init();
     MX_TIM3_Init();
     MX_TIM2_Init();
+    MX_TIM5_Init();     /* 500Hz 控制节拍，中断里只发信号量 */
 
     HAL_UART_Transmit(&huart1, (uint8_t *)"BOOT OK v2 (USART1 115200)\r\n",
                       strlen("BOOT OK v2 (USART1 115200)\r\n"), 1000);
@@ -398,6 +505,14 @@ int main(void)
 
     /* ---- uC/OS-II 内核初始化 ---- */
     OSInit();
+
+    /* ---- 节拍信号量（TIM5 中断里 Post，任务里 Pend）---- */
+    SensorSem = OSSemCreate(0);
+    ShellSem  = OSSemCreate(0);
+    CoreSem   = OSSemCreate(0);
+    if (SensorSem == (OS_EVENT *)0 || ShellSem == (OS_EVENT *)0 || CoreSem == (OS_EVENT *)0) {
+        Error_Handler();
+    }
 
     /* ---- 创建启动任务（最高优先级，负责后续初始化）---- */
     os_err = OSTaskCreate(StartTask,
@@ -507,6 +622,18 @@ void StartTask(void *p_arg)
                           SENSOR_TASK_PRIO);
     OSTaskNameSet(SENSOR_TASK_PRIO, (INT8U *)"Sensor Task", &os_err);
 
+    os_err = OSTaskCreate(PIDShellTask,
+                          (void *)0,
+                          &PIDShellTaskStk[PIDSHELL_TASK_STK_SIZE - 1],
+                          PIDSHELL_TASK_PRIO);
+    OSTaskNameSet(PIDSHELL_TASK_PRIO, (INT8U *)"PID Shell Task", &os_err);
+
+    os_err = OSTaskCreate(PIDCoreTask,
+                          (void *)0,
+                          &PIDCoreTaskStk[PIDCORE_TASK_STK_SIZE - 1],
+                          PIDCORE_TASK_PRIO);
+    OSTaskNameSet(PIDCORE_TASK_PRIO, (INT8U *)"PID Core Task", &os_err);
+
     os_err = OSTaskCreate(UartTask,
                           (void *)0,
                           &UartTaskStk[UART_TASK_STK_SIZE - 1],
@@ -519,19 +646,10 @@ void StartTask(void *p_arg)
                           BARO_TASK_PRIO);
     OSTaskNameSet(BARO_TASK_PRIO, (INT8U *)"Baro Task", &os_err);
 
-    os_err = OSTaskCreate(PIDShellTask,
-                          (void *)0,
-                          &PIDShellTaskStk[PIDSHELL_TASK_SIZE - 1],
-                          PIDSHELL_TASK_PRIO);
-    OSTaskNameSet(PIDSHELL_TASK_PRIO, (INT8U *)"PIDShell Task", &os_err);
+    /* 4. 启动 500Hz 节拍（放在任务创建之后，保证第一个节拍一定有人接）*/
+    HAL_TIM_Base_Start_IT(&htim5);
 
-    os_err = OSTaskCreate(PIDCoreTask,
-                          (void *)0,
-                          &PIDCoreTaskStk[PIDCORE_TASK_SIZE - 1],
-                          PIDCORE_TASK_PRIO);
-    OSTaskNameSet(PIDCORE_TASK_PRIO, (INT8U *)"PIDCore Task", &os_err);
-
-    /* 4. 初始化任务完成，自我删除 */
+    /* 5. 初始化任务完成，自我删除 */
     (void)OSTaskDel(OS_PRIO_SELF);
 }
 

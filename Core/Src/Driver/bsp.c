@@ -27,8 +27,8 @@
 #define GYRO_CONFIG_REG       0x1B   /* 陀螺量程配置               */
 #define ACCEL_CONFIG_REG      0x1C   /* 加速度量程配置             */
 #define INT_PIN_CFG_REG       0x37   /* 旁路模式配置寄存器         */
-#define ACCEL_XOUT_H_REG      0x3B
-#define GYRO_XOUT_H_REG       0x43
+#define ACCEL_XOUT_H_REG      0x3B   /* 加速度计X轴高8位寄存器       */
+#define GYRO_XOUT_H_REG       0x43   /* 陀螺仪X轴高8位寄存器         */
 
 /* HMC5883L */
 #define HMC5883L_ADDR         0x3C   /* (0x1E << 1)               */
@@ -140,8 +140,10 @@ void MPU6050_Init(void)
     HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, SMPLRT_DIV_REG,
                       1, Data, 1, I2C_TIMEOUT_MS);
 
-    /* DLPF：数字低通 44Hz（带宽 42Hz，延时 4.9ms） */
-    Data[0] = 0x03;
+    /* DLPF：数字低通 98Hz（带宽 98Hz，延时 2.8ms）
+     * 500Hz 控制循环下，原来的 44Hz 档群延迟 4.9ms，比整个采样周期还长，
+     * 是姿态滞后的主要来源。这里放宽到 98Hz，噪声用后面的梯度融合压。 */
+    Data[0] = 0x02;
     HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, CONFIG_REG,
                       1, Data, 1, I2C_TIMEOUT_MS);
 
@@ -171,7 +173,7 @@ void HMC5883L_Init(void)
     uint8_t Data[2];
 
     /* 配置寄存器 A：8 次平均采样、75Hz 输出速率、正常测量 */
-    Data[0] = 0x70;
+    Data[0] = 0x78;
     HAL_I2C_Mem_Write(&hi2c1, HMC5883L_ADDR, HMC_CONF_A_REG,
                       1, Data, 1, I2C_TIMEOUT_MS);
 
@@ -224,15 +226,28 @@ void All_Sensors_Init(void)
  *                      传感器数据读取函数
  * ================================================================ */
 
-void MPU6050_Read_Raw(void)
+uint8_t MPU6050_Read_Raw(void)
 {
-    uint8_t Rec_Data[14];   /* ACCEL_XOUT_H 到 GYRO_ZOUT_L 共 14 字节 */
+    /**
+     * @brief 读取 MPU6050 原始数据
+     * @note 该函数会将 MPU6050 中的原始数据读取到 Rec_Data 数组中.
+     *       目标寄存器：ACCEL_XOUT_H_REG，ACCEL_XOUT_L_REG，（分别是高8位和低8位），0x3B开始，后面几个都是连续的（0x3C, 0x3D。。。）
+     *                 ACCEL_YOUT_H_REG，ACCEL_YOUT_L_REG，
+     *                 ACCEL_ZOUT_H_REG，ACCEL_ZOUT_L_REG，
+     *                 GYRO_XOUT_H_REG，GYRO_XOUT_L_REG，（0x43开始，后面几个都是连续的（0x44, 0x45。。。））
+     *                 GYRO_YOUT_H_REG，GYRO_YOUT_L_REG，
+     *                 GYRO_ZOUT_H_REG，GYRO_ZOUT_L_REG
+     *       要读取到的数据：
+     *       - 加速度计：Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW
+     *       - 陀螺仪：Gyro_X_RAW, Gyro_Y_RAW, Gyro_Z_RAW
+     */
+    uint8_t Rec_Data[14];   /* ACCEL_XOUT_H 到 GYRO_ZOUT_L 共14字节，中间还插了2个字节温度 */
 	
-	// 一次性从 0x3B 开始连续读取 14 个字节
+	// 一次性从 0x3B 开始连续读取 14 个字节，使用I2C1外设
     if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, ACCEL_XOUT_H_REG,
                          1, Rec_Data, 14, I2C_TIMEOUT_MS) == HAL_OK) {
 		// 加速度计 (X, Y, Z)
-        Accel_X_RAW = (int16_t)(Rec_Data[0]  << 8 | Rec_Data[1]);
+        Accel_X_RAW = (int16_t)(Rec_Data[0]  << 8 | Rec_Data[1]);   // 拼接高8位和低8位，得到16位数据
         Accel_Y_RAW = (int16_t)(Rec_Data[2]  << 8 | Rec_Data[3]);
         Accel_Z_RAW = (int16_t)(Rec_Data[4]  << 8 | Rec_Data[5]);
 		
@@ -242,12 +257,24 @@ void MPU6050_Read_Raw(void)
         Gyro_X_RAW  = (int16_t)(Rec_Data[8]  << 8 | Rec_Data[9]);
         Gyro_Y_RAW  = (int16_t)(Rec_Data[10] << 8 | Rec_Data[11]);
         Gyro_Z_RAW  = (int16_t)(Rec_Data[12] << 8 | Rec_Data[13]);
+        return 1u;
     }
+    return 0u;
+}
+
+static uint8_t  mag_read_ok;
+static uint32_t mag_read_ms;
+
+/* 每 20 ms 读一次。掉线立即停用旧值，漏掉两拍也不再拿它修偏航。 */
+uint8_t HMC5883L_Data_Valid(void)
+{
+    return mag_read_ok && (HAL_GetTick() - mag_read_ms < 40u);
 }
 
 void HMC5883L_Read_Raw(void)
 {
     uint8_t Rec_Data[6];
+    mag_read_ok = 0;
 	
 	// 从 HMC_DATA_X_H_REG (0x03) 开始连续读取 6 个字节
     // 顺序是 X高, X低, Z高, Z低, Y高, Y低
@@ -256,6 +283,12 @@ void HMC5883L_Read_Raw(void)
         Mag_X_RAW = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
         Mag_Z_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);  /* Z 在 Y 之前！ */
         Mag_Y_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+        /* 任一轴报 -4096 表示溢出，本帧不能用。 */
+        if (Mag_X_RAW != -4096 && Mag_Y_RAW != -4096 && Mag_Z_RAW != -4096 &&
+            (Mag_X_RAW || Mag_Y_RAW || Mag_Z_RAW)) {
+            mag_read_ms = HAL_GetTick();
+            mag_read_ok = 1;
+        }
     }
 }
 
