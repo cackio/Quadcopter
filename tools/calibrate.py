@@ -16,11 +16,14 @@ import numpy as np
 from scipy.optimize import least_squares
 from protocol import ROOT, SCHEMA
 
+MAG_FIT_MIN_SAMPLES = 1000
+MAG_VALIDATION_MIN_SAMPLES = 300
+
 
 def fit_magnetometer(samples):
     samples = np.asarray(samples, dtype=float)
-    if samples.ndim != 2 or samples.shape[1] != 3 or len(samples) < 1000:
-        raise ValueError("Need at least 1000 fresh 3D magnetic samples")
+    if samples.ndim != 2 or samples.shape[1] != 3 or len(samples) < MAG_FIT_MIN_SAMPLES:
+        raise ValueError(f"Need at least {MAG_FIT_MIN_SAMPLES} fresh 3D magnetic samples")
     if not np.isfinite(samples).all() or (samples == -4096).any():
         raise ValueError("Invalid/overflow magnetic samples")
     if len(np.unique(samples, axis=0)) < 300:
@@ -248,8 +251,9 @@ def fit_accelerometer_statistics(faces):
 
 def validate_magnetometer(samples,bias,matrix):
     samples=np.asarray(samples,float); bias=np.asarray(bias,float); matrix=np.asarray(matrix,float)
-    if samples.ndim!=2 or samples.shape[1]!=3 or len(samples)<300 or not np.isfinite(samples).all() or (samples==-4096).any():
-        raise ValueError("Independent magnetic validation needs >=300 valid raw points")
+    if (samples.ndim!=2 or samples.shape[1]!=3 or len(samples)<MAG_VALIDATION_MIN_SAMPLES or
+        not np.isfinite(samples).all() or (samples==-4096).any()):
+        raise ValueError(f"Independent magnetic validation needs >={MAG_VALIDATION_MIN_SAMPLES} valid raw points")
     if bias.shape!=(3,) or matrix.shape!=(3,3) or not np.isfinite(bias).all() or not np.isfinite(matrix).all():
         raise ValueError("Invalid magnetic coefficients")
     if not np.allclose(matrix,matrix.T,atol=1e-8) or np.linalg.eigvalsh(matrix).min()<=0:

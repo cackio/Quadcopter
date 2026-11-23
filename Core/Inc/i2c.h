@@ -35,12 +35,17 @@ extern "C" {
 extern I2C_HandleTypeDef hi2c1;
 
 /* USER CODE BEGIN Private defines */
+#define I2C1_SCL_HIGH 1U
+#define I2C1_SDA_HIGH 2U
+#define I2C1_LINES_RELEASED (I2C1_SCL_HIGH | I2C1_SDA_HIGH)
 
 /* USER CODE END Private defines */
 
 void MX_I2C1_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+uint8_t I2C1_ReadLines(void);
+void I2C1_RecoverBus(void);
 
 /* USER CODE END Prototypes */
 

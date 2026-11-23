@@ -10,6 +10,11 @@ typedef enum
     HAL_OK = 0,
     HAL_ERROR = 1, HAL_BUSY = 2
 } HAL_StatusTypeDef;
+#define I2C1_SCL_HIGH 1U
+#define I2C1_SDA_HIGH 2U
+#define I2C1_LINES_RELEASED (I2C1_SCL_HIGH | I2C1_SDA_HIGH)
+uint8_t I2C1_ReadLines(void);
+void I2C1_RecoverBus(void);
 extern I2C_HandleTypeDef hi2c1;
 extern int mock_busy;
 #define I2C_FLAG_BUSY 1

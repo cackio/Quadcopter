@@ -5,6 +5,7 @@
 #include "bsp.h"
 #include "cal_wire.h"
 #include "flight_config.h"
+#include "i2c.h"
 #include "imu_driver.h"
 #include "sensor_calibration.h"
 #include "sensor_data.h"
@@ -608,6 +609,25 @@ static void TelemetryTask(void *argument)
         }
     }
 }
+static void init_sensors(void)
+{
+    unsigned attempt;
+    imu_ok = 0;
+    mag_present = 0;
+    for (attempt = 0; ; ++attempt)
+    {
+        if (!imu_ok)
+            imu_ok = (uint8_t)IMU_Init();
+        if (!mag_present)
+            mag_present = (uint8_t)Magnetometer_Init();
+        if (attempt == 2 || (Sensor_Diagnostic(0)->stage != DRIVER_BUS_BUSY &&
+                             Sensor_Diagnostic(1)->stage != DRIVER_BUS_BUSY))
+            return;
+        I2C1_RecoverBus();
+        HAL_Delay(20);
+    }
+}
+
 void Flight_Start(void)
 {
     INT8U error;
@@ -618,8 +638,7 @@ void Flight_Start(void)
     GyroCalibration_Reset(&gyro_cal);
     CalService_Init(&calibration);
     config_ok = (uint8_t)calibration_valid();
-    imu_ok = (uint8_t)IMU_Init();
-    mag_present = (uint8_t)Magnetometer_Init();
+    init_sensors();
     SEGGER_RTT_WriteString(0, "Bench attitude firmware; motor PWM disabled.\n");
     if (!config_ok)
         SEGGER_RTT_WriteString(0, "ERROR: invalid mapping/calibration matrix.\n");

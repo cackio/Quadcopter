@@ -7,6 +7,20 @@
 I2C_HandleTypeDef hi2c1;
 int mock_busy;
 unsigned mock_busy_cycles, mock_stop_cycles;
+unsigned mock_bus_recoveries, mock_release_on_recovery;
+
+uint8_t I2C1_ReadLines(void)
+{
+    return mock_busy ? I2C1_SCL_HIGH : I2C1_LINES_RELEASED;
+}
+
+void I2C1_RecoverBus(void)
+{
+    ++mock_bus_recoveries;
+    if (mock_bus_recoveries == mock_release_on_recovery)
+        mock_busy = 0;
+}
+
 unsigned mock_busy_status(void)
 {
     if (mock_busy) return 1;
@@ -25,6 +39,7 @@ void mock_reset(void)
     memcpy(mag_regs + 0x0A, "H43", 3);
     mock_busy = 0;
     mock_busy_cycles = mock_stop_cycles = 0;
+    mock_bus_recoveries = mock_release_on_recovery = 0;
     failed_register = corrupt_register = -1;
     mock_reads = mock_timeout = 0;
     mock_imu_address = 0xD0;

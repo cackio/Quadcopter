@@ -112,5 +112,48 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
 }
 
 /* USER CODE BEGIN 1 */
+uint8_t I2C1_ReadLines(void)
+{
+  return (uint8_t)((HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6) == GPIO_PIN_SET ? I2C1_SCL_HIGH : 0U) |
+                   (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET ? I2C1_SDA_HIGH : 0U));
+}
+
+/* Called at startup before sensor sampling starts. Release both pins as
+ * open drain. An interrupted target can release SDA after up to nine clocks. */
+void I2C1_RecoverBus(void)
+{
+  GPIO_InitTypeDef pins = {0};
+  unsigned clocks;
+
+  HAL_I2C_DeInit(&hi2c1);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_SET);
+  pins.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+  pins.Mode = GPIO_MODE_OUTPUT_OD;
+  pins.Pull = GPIO_NOPULL;
+  pins.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &pins);
+  HAL_Delay(1);
+
+  for (clocks = 0; clocks < 9 && I2C1_ReadLines() == I2C1_SCL_HIGH; ++clocks)
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_Delay(1);
+  }
+  if (clocks && I2C1_ReadLines() == I2C1_LINES_RELEASED)
+  {
+    /* STOP is SDA rising after SCL has been released. */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_Delay(1);
+  }
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_SET);
+  HAL_Delay(1);
+  MX_I2C1_Init();
+}
 
 /* USER CODE END 1 */

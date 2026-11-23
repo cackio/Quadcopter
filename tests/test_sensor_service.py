@@ -1,16 +1,18 @@
 import ctypes as ct
+import csv
 import struct
 import json
 import subprocess
 import sys
+from types import SimpleNamespace
 import numpy as np
 import pytest
 from conftest import ImuRaw
-from protocol import SCHEMA as S, Parser, pack_command, decode_cal_reply
+from protocol import ROOT, SCHEMA as S, Parser, pack_command, decode_cal_reply
 from calibrate import fit_accelerometer_statistics, validate_magnetometer
 from sensor_check import (check_gyro, check_accel, mapping_from_directions,
                           fresh_magnetic, compare_coefficients, Client,
-                          collect_magnetic, header_coefficients)
+                          collect_magnetic, header_coefficients, run_wizard)
 
 
 class Moments(ct.Structure):
@@ -223,10 +225,10 @@ def test_real_app_commands_info_pages_and_parameter_query(service):
     n,s=service; n.mock_reset(); n.app_reset()
     _,p=app_send(n,S['CAL_INFO']); info=decode_cal_reply(p)
     assert info['app_mode']==1 and info['imu_ok'] and info['mag_present']
-    assert info['baud']==9600 and info['imu_hz']==200 and info['firmware_magic']==0x53434131
+    assert info['baud']==115200 and info['imu_hz']==200 and info['firmware_magic']==0x53434131
     assert info['rx_bytes']==18
-    from protocol import ROOT
-    expected,_=header_coefficients(ROOT/'Core/Inc/sensor_calibration.h')
+    expected,flags=header_coefficients(ROOT/'Core/Inc/sensor_calibration.h')
+    assert info['cal_flags']==flags
     actual={}
     for page in (3,4,5):
         _,payload=app_send(n,S['CAL_INFO'],face=page)
@@ -235,6 +237,24 @@ def test_real_app_commands_info_pages_and_parameter_query(service):
     _,payload=app_send(n,S['CAL_INFO'],face=1)
     driver=decode_cal_reply(payload)
     assert driver['id0']==0x68 and driver['initialized']
+
+
+@pytest.mark.parametrize("release_on_recovery",[0,1,2])
+def test_real_app_retries_startup_busy_and_reports_held_lines(service,release_on_recovery):
+    n,_=service
+    n.mock_reset()
+    ct.c_int.in_dll(n,"mock_busy").value=1
+    ct.c_uint.in_dll(n,"mock_release_on_recovery").value=release_on_recovery
+    n.app_reset()
+    _,payload=app_send(n,S["CAL_INFO"])
+    info=decode_cal_reply(payload)
+    assert ct.c_uint.in_dll(n,"mock_bus_recoveries").value==(release_on_recovery or 2)
+    assert info["imu_ok"]==info["mag_present"]==bool(release_on_recovery)
+    if not release_on_recovery:
+        _,payload=app_send(n,S["CAL_INFO"],face=2)
+        mag=decode_cal_reply(payload)
+        assert (mag["stage"],mag["hal_status"],mag["expected"],mag["actual"])==(5,2,3,1)
+    n.mock_reset()
 
 
 def test_real_app_rx_overflow_error_recovery_and_persistent_tx(service):
@@ -277,14 +297,123 @@ def test_real_app_raw_mode_ignores_attitude_validity_and_accepts_calibration(ser
     assert row['cal_samples']==1000 and row['sequence']==1200
 
 
-def test_magnetic_barrier_excludes_buffered_training_points():
-    class Link:
+@pytest.fixture
+def magnetic_link(monkeypatch):
+    class Link(Client):
+        def __init__(self):
+            super().__init__(None,None)
+            self.now=0
+            self.mag_sequence=40
+            self.samples=iter(())
+            self.buffered=False
+            self.inject_read_error=False
+
         def info(self,page=0):
-            return dict(new_samples=40) if page else dict(uptime_ms=1000,imu_errors=0,mag_errors=0)
-        def observe(self,seconds,show=False):
-            return [dict(sequence=100,mag_sequence=39),dict(sequence=101,mag_sequence=40),
-                    dict(sequence=102,mag_sequence=41)]
-    assert [r['mag_sequence'] for r in collect_magnetic(Link(),1)]==[41]
+            if page:
+                return dict(new_samples=self.mag_sequence,overflow=0,read_errors=0)
+            return dict(uptime_ms=int(self.now*1000),imu_errors=0,
+                        mag_errors=int(self.inject_read_error and self.now>10))
+
+        def pump(self):
+            self.now+=0.1
+            if self.buffered:
+                self.buffered=False
+                x,y,z=999,999,999
+            else:
+                sample=next(self.samples,None)
+                if sample is None:
+                    return
+                x,y,z=sample
+                self.mag_sequence+=1
+            self.rows.append(dict(sequence=len(self.rows)+1,mag_sequence=self.mag_sequence,
+                                  mag_age_us=1000,flags=S["STATUS_MAG_PRESENT"],mx=x,my=y,mz=z))
+
+    link=Link()
+    monkeypatch.setattr("sensor_check.time",SimpleNamespace(monotonic=lambda:link.now))
+    return link
+
+
+@pytest.mark.parametrize("valid_hold",[True,False])
+def test_magnetic_wizard_splits_data_and_exports_only_after_validation(
+        magnetic_link,tmp_path,monkeypatch,capsys,valid_hold):
+    link=magnetic_link
+    link.inject_read_error=True
+    rng=np.random.default_rng(30)
+    directions=rng.normal(size=(3000,3))
+    directions/=np.linalg.norm(directions,axis=1)[:,None]
+    expected_bias=np.array([110,-40,80])
+    raw=np.rint(directions*np.array([480,510,620])+expected_bias).astype(int)
+    hold=raw[1800:]
+    if not valid_hold:
+        hold[:,2]=80
+    streams=iter((raw[:1800],hold))
+    args=SimpleNamespace(stage="mag",seconds=240,mag_verify_seconds=90,
+                         base=ROOT/"Core/Inc/sensor_calibration.h")
+    base,flags=header_coefficients(args.base)
+    info,observe=link.info,link.observe
+    starts,prompts=[],[]
+
+    def observe_phase(*args,**kwargs):
+        starts.append((link.now,link.mag_sequence))
+        link.samples=iter(next(streams))
+        link.buffered=True
+        return observe(*args,**kwargs)
+
+    link.connect=lambda: dict(app_mode=1,imu_ok=1,mag_present=1)
+    link.info=lambda page=0: dict(coefficients=base[str(page)]) if page>=3 else info(page)
+    link.observe=observe_phase
+    monkeypatch.setattr("builtins.input",prompts.append)
+    report={"stage":"mag"}
+    candidate=tmp_path/"sensor_calibration.h"
+    if valid_hold:
+        run_wizard(link,args,tmp_path,report)
+        quality=report["mag"]["validation"]
+        assert 300<=quality["samples"]<320 and link.now-starts[1][0]<35
+        parameters,candidate_flags=header_coefficients(candidate)
+        assert candidate_flags==flags|2 and parameters["3"]==base["3"] and parameters["5"]==base["5"]
+    else:
+        with pytest.raises(ValueError,match="独立验证到达时间上限，质量未达标"):
+            run_wizard(link,args,tmp_path,report)
+        assert "validation" not in report["mag"] and not candidate.exists()
+    assert len(prompts)==1
+    assert report["mag"]["fit"]["mag_read_errors"]==1
+    assert np.allclose(report["mag"]["bias_raw"],expected_bias,atol=1)
+    assert 1000<=report["mag"]["fit"]["samples"]<1020 and starts[1][0]<110
+    with (tmp_path/"mag_independent.csv").open(encoding="utf-8-sig") as stream:
+        sequences=[int(row["mag_sequence"]) for row in csv.DictReader(stream)]
+    assert sequences and min(sequences)>starts[1][1]
+    output=capsys.readouterr().out
+    assert "XYZ 变化范围" in output and "拟合采集通过" in output
+    assert "磁力计 1 次" in output
+    assert ("独立验证通过" in output)==valid_hold
+    if valid_hold:
+        (tmp_path/"session.json").write_text(json.dumps(report),encoding="utf-8")
+        post_flash=tmp_path/"post_flash"
+        post_flash.mkdir()
+        streams=iter((raw[1200:1800],))
+        link.connect=lambda: dict(app_mode=1,imu_ok=1,mag_present=1,cal_flags=candidate_flags)
+        link.info=lambda page=0: dict(coefficients=parameters[str(page)]) if page>=3 else info(page)
+        args=SimpleNamespace(stage="verify",verify_from=tmp_path,mag_verify_seconds=90)
+        report={}
+        run_wizard(link,args,post_flash,report)
+        assert len(prompts)==2 and (post_flash/"mag_post_flash.csv").is_file()
+        assert "mag" in report["post_flash"]["checks"]
+
+
+def test_magnetic_capture_fails_early_without_fresh_points(magnetic_link,tmp_path):
+    with pytest.raises(RuntimeError,match="连续 10 秒无新有效磁场点"):
+        collect_magnetic(magnetic_link,240,tmp_path/"mag_train.csv")
+    assert magnetic_link.now<12
+
+
+def test_magnetic_capture_keeps_data_when_coverage_fails(magnetic_link,tmp_path,capsys):
+    angles=np.linspace(0,4*np.pi,2000)
+    magnetic_link.samples=iter(zip(500*np.cos(angles),500*np.sin(angles),np.zeros_like(angles)))
+    path=tmp_path/"mag_train.csv"
+    with pytest.raises(ValueError,match="质量未达标"):
+        collect_magnetic(magnetic_link,104,path)
+    assert path.is_file()
+    assert "继续缓慢翻转" in capsys.readouterr().out
 
 
 def test_cli_replay_and_failed_offline_never_exports_parameters(native,tmp_path):

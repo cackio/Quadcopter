@@ -39,7 +39,7 @@ static int16_t s16(const uint8_t *p)
 /* HAL can return before the physical STOP has released BUSY. Consecutive
  * transactions (WHO_AM_I -> reset, configuration write -> readback, MPU -> mag)
  * must allow that short tail. Bound it here instead of HAL's 25 ms BUSY wait. */
-static int bus_ready(uint16_t address, uint8_t reg, uint8_t expected)
+static int bus_ready(uint16_t address, uint8_t reg)
 {
     uint32_t start;
     if (!__HAL_I2C_GET_FLAG(&hi2c1, I2C_FLAG_BUSY))
@@ -49,7 +49,7 @@ static int bus_ready(uint16_t address, uint8_t reg, uint8_t expected)
     {
         if ((uint32_t)(HAL_GetTick() - start) >= FLIGHT_I2C_BUS_IDLE_TIMEOUT_MS)
         {
-            fault(address, DRIVER_BUS_BUSY, reg, expected, 0, HAL_BUSY);
+            fault(address, DRIVER_BUS_BUSY, reg, I2C1_LINES_RELEASED, I2C1_ReadLines(), HAL_BUSY);
             return 0;
         }
     }
@@ -58,7 +58,7 @@ static int bus_ready(uint16_t address, uint8_t reg, uint8_t expected)
 static int read_reg(uint16_t address, uint8_t reg, uint8_t *data, uint16_t count)
 {
     HAL_StatusTypeDef result;
-    if (!bus_ready(address, reg, 0))
+    if (!bus_ready(address, reg))
         return 0;
     result = HAL_I2C_Mem_Read(&hi2c1, address, reg, I2C_MEMADD_SIZE_8BIT, data, count,
                               FLIGHT_I2C_TIMEOUT_MS);
@@ -69,7 +69,7 @@ static int read_reg(uint16_t address, uint8_t reg, uint8_t *data, uint16_t count
 static int write_reg(uint16_t address, uint8_t reg, uint8_t value)
 {
     HAL_StatusTypeDef result;
-    if (!bus_ready(address, reg, value))
+    if (!bus_ready(address, reg))
         return 0;
     result = HAL_I2C_Mem_Write(&hi2c1, address, reg, I2C_MEMADD_SIZE_8BIT, &value, 1,
                                FLIGHT_I2C_TIMEOUT_MS);
@@ -107,6 +107,8 @@ int IMU_Init(void)
                 break;
             fault(imu_address, DRIVER_ID, 0x75, 0x68, id, HAL_OK);
         }
+        else if (diagnostic[0].stage == DRIVER_BUS_BUSY)
+            return 0;
     }
     if (i == 2)
         return 0;

@@ -1,4 +1,4 @@
-"""GY-86 中文引导：板上 200 Hz 静态统计、独立验证、磁场拟合与烧录复查。"""
+"""GY-86/GY-87 中文引导：板上 200 Hz 静态统计、独立验证、磁场拟合与烧录复查。"""
 import argparse
 import copy
 import csv
@@ -9,7 +9,8 @@ import time
 from collections import Counter, deque
 from pathlib import Path
 from calibrate import (np, fit_accelerometer_statistics, fit_magnetometer,
-                       validate_magnetometer, export_header, c_vector, AccelerometerFaceError)
+                       validate_magnetometer, export_header, c_vector, AccelerometerFaceError,
+                       MAG_FIT_MIN_SAMPLES, MAG_VALIDATION_MIN_SAMPLES)
 from protocol import (ROOT, SCHEMA as S, Parser, pack_command,
                       decode_diagnostic, decode_cal_reply)
 
@@ -221,16 +222,21 @@ class Client:
             # explicitly query the retained job rather than combining sessions.
             self.active_job=None
 
-    def observe(self, seconds, show=True):
+    def observe(self, seconds, show=True, *, stop_when=None):
         start=len(self.rows); deadline=time.monotonic()+seconds; display=0
         while time.monotonic()<deadline:
             self.pump()
-            if show and self.rows and time.monotonic()>=display:
+            now=time.monotonic()
+            if now<display:
+                continue
+            if stop_when is not None and stop_when(self.rows[start:]):
+                break
+            if show and self.rows:
                 r=self.rows[-1]
                 a=[round(r[k]/16384,3) for k in ("ax","ay","az")]
                 g=[round(r[k]/65.5,3) for k in ("gx","gy","gz")]
                 print(f"RAW seq={r['sequence']} a(g)={a} gyro(°/s)={g} mag={[r[k] for k in ('mx','my','mz')]} err={r['i2c_errors']}")
-                display=time.monotonic()+1
+            display=now+1
         return self.rows[start:]
 
 
@@ -251,23 +257,88 @@ def get_coefficients(client):
     return {str(p):client.info(p)["coefficients"] for p in (3,4,5)}
 
 
-def collect_magnetic(client,seconds):
+def collect_magnetic(client,seconds,path,*,coefficients=None):
     # Serial FIFO ordering makes INFO an acknowledgement barrier. Fence by the
     # actual fresh mag counter as well, so buffered training samples cannot be
-    # counted as independent validation data after an input() pause.
+    # counted as independent validation data.
     before=client.info(); marker=client.info(2)["new_samples"]
-    rows=client.observe(seconds,show=False)
+    if coefficients is None:
+        label, target, evaluate = "拟合采集", MAG_FIT_MIN_SAMPLES, fit_magnetometer
+    else:
+        label, target = "独立验证", MAG_VALIDATION_MIN_SAMPLES
+
+        def evaluate(points):
+            return validate_magnetometer(points,*coefficients)
+
+    def within_phase(rows):
+        return [r for r in rows if 0<((r["mag_sequence"]-marker)&0xffffffff)<0x80000000]
+
+    start=last_new=time.monotonic()
+    last_count=last_checked=0
+    result=failure=None
+    stalled=False
+    live=sys.stdout.isatty()
+
+    def progress(rows):
+        nonlocal last_count,last_new,last_checked,result,failure,stalled
+        points=fresh_magnetic(within_phase(rows))
+        count=len(points)
+        now=time.monotonic()
+        if count>last_count:
+            last_count,last_new=count,now
+        stalled=now-last_new>=10
+        spans="/".join(str(int(v)) for v in np.ptp(points,axis=0)) if count else "--"
+        print(f"{label} {now-start:.0f}/{seconds:g} 秒 | 有效点 {count}（至少 {target}）"
+              f" | XYZ 变化范围 {spans}    ",end="\r" if live else "\n",flush=True)
+        if count>=target and (last_checked==0 or count-last_checked>=50):
+            last_checked=count
+            try:
+                result=evaluate(points)
+            except ValueError as error:
+                failure=error
+                if live:
+                    print()
+                print(f"{label}暂未达标（{error}）。继续缓慢翻转，换几个倾斜方向。",flush=True)
+        return result is not None or stalled
+
+    print(f"{label}开始，达到样本数和质量要求后自动结束。",flush=True)
+    rows=client.observe(seconds,show=False,stop_when=progress)
+    if live:
+        print()
+    selected=within_phase(rows)
+    write_csv(path,selected)
     after=client.info()
     previous=None
     for row in rows:
         if previous is not None and ((row["sequence"]-previous)&0xffffffff)>=0x80000000:
             raise RuntimeError("采样序号倒退，疑似板子复位，不能合并磁场数据")
         previous=row["sequence"]
-    if (after["uptime_ms"]<before["uptime_ms"] or
-        after["imu_errors"]!=before["imu_errors"] or
-        after["mag_errors"]!=before["mag_errors"]):
-        raise RuntimeError("采集期间板子复位或 I2C 错误增长，本次磁场数据作废")
-    return [r for r in rows if 0<((r["mag_sequence"]-marker)&0xffffffff)<0x80000000]
+    if ((after["uptime_ms"]-before["uptime_ms"])&0xffffffff)>=0x80000000:
+        raise RuntimeError("采集期间板子复位，不能合并磁场数据")
+    imu_errors=(after["imu_errors"]-before["imu_errors"])&0xffffffff
+    mag_errors=(after["mag_errors"]-before["mag_errors"])&0xffffffff
+    if imu_errors or mag_errors:
+        print(f"{label}期间 I²C 读错：MPU {imu_errors} 次，磁力计 {mag_errors} 次；继续用有效新磁场点判定。")
+    if stalled:
+        mag=client.info(2)
+        raise RuntimeError(f"{label}连续 10 秒无新有效磁场点；检查 GY-87 供电和 I²C。"
+                           f"板上累计新样本 {mag['new_samples']}，溢出 {mag['overflow']}，读取错误 {mag['read_errors']}")
+    if result is None:
+        # The time limit may fall between progress updates.
+        points=fresh_magnetic(selected)
+        if len(points)<target:
+            raise ValueError(f"{label}到达时间上限，仅收到 {len(points)}/{target} 个有效点")
+        if len(points)==last_checked and failure is not None:
+            raise ValueError(f"{label}到达时间上限，质量未达标（{failure}）") from failure
+        try:
+            result=evaluate(points)
+        except ValueError as error:
+            raise ValueError(f"{label}到达时间上限，质量未达标（{error}）") from error
+    quality=result[2] if coefficients is None else result
+    quality.update(imu_read_errors=imu_errors,mag_read_errors=mag_errors)
+    print(f"{label}通过 | {quality['samples']} 点 | 内点 {quality['inlier_fraction']:.1%}"
+          f" | 内点 RMS {quality['rms_relative']:.2%}",flush=True)
+    return result
 
 
 def compare_coefficients(actual, expected):
@@ -465,7 +536,10 @@ def run_wizard(client, args, folder, report):
     info=client.connect(); report["firmware"]=info
     report["drivers"]={"imu":client.info(1),"mag":client.info(2)}
     report["initial_coefficients"]=get_coefficients(client)
-    print(json.dumps(report["drivers"],ensure_ascii=False,indent=2))
+    if args.stage=="mag" and info["app_mode"]==1 and info["imu_ok"] and info["mag_present"]:
+        print("双向通信及传感器初始化通过，准备采集磁场。")
+    else:
+        print(json.dumps(report["drivers"],ensure_ascii=False,indent=2))
     if args.stage=="link":
         report["status"]="双向通信及固件信息查询通过；传感器结果见drivers，尚未校准"
         print("双向通信已通过，当前 app_mode=",info["app_mode"],"（1为独立校准，0为姿态）")
@@ -473,6 +547,14 @@ def run_wizard(client, args, folder, report):
     if info["app_mode"]!=1:
         raise RuntimeError("请烧录 FLIGHT_APP_MODE=1 的独立校准固件；普通姿态固件只支持信息查询")
     if not info["imu_ok"]:
+        if all(driver.get("stage")==5 and driver.get("hal_status")==2 for driver in report["drivers"].values()):
+            mag=report["drivers"]["mag"]
+            levels=""
+            if mag["expected"]==3:  # DRIVER_BUS_BUSY encodes SCL/SDA high in bits 0/1.
+                scl="高" if mag["actual"]&1 else "低"
+                sda="高" if mag["actual"]&2 else "低"
+                levels=f"（PB6/SCL {scl}，PB7/SDA {sda}）"
+            raise RuntimeError(f"MPU 和磁力计初始化时 I²C 总线忙{levels}。断电检查 GY 模块供电、共地、SCL/SDA，处理后重新上电")
         raise RuntimeError("MPU 初始化失败：上述 stage/register/expected/actual/hal_error 是具体原因")
     resume=None
     if getattr(args,"resume",None):
@@ -509,7 +591,8 @@ def run_wizard(client, args, folder, report):
     changes={}; stage=args.stage
     if stage in ("all","raw"):
         report["raw"]=raw_stage(client,10 if stage=="all" else args.seconds)
-    if stage in ("all","gyro","accel","verify"):
+    mag_only_verify=stage=="verify" and previous.get("stage")=="mag"
+    if stage in ("all","gyro","accel","verify") and not mag_only_verify:
         if resume and can_reuse_gyro(resume,info,report["drivers"]["imu"],client.info(6)):
             report["gyro"]=copy.deepcopy(resume["source"]["gyro"])
             report["resume"]["gyro_reused"]=True
@@ -563,18 +646,14 @@ def run_wizard(client, args, folder, report):
                 raise RuntimeError("H43 磁力计未识别，请查磁力计诊断；MPU 校准仍然可用")
             report["mag"]={"status":"磁力计缺失，跳过；九轴未验收"}
         else:
-            input("保持最终装配与供电，远离铁桌/磁铁。回车后缓慢翻转整个机架，覆盖所有三维方向：")
-            train_rows=collect_magnetic(client,args.seconds)
-            train=fresh_magnetic(train_rows)
-            write_csv(folder/"mag_train.csv",train_rows)
-            bias,matrix,fit=fit_magnetometer(train)
-            input("拟合通过。现在重新采集独立数据；不要重放之前动作记录。回车开始多方向转动：")
-            hold_rows=collect_magnetic(client,args.mag_verify_seconds)
-            hold=fresh_magnetic(hold_rows)
-            write_csv(folder/"mag_independent.csv",hold_rows)
-            quality=validate_magnetometer(hold,bias,matrix)
-            report["mag"]={"bias_raw":bias.tolist(),"matrix":matrix.tolist(),"fit":fit,"validation":quality,
-                           "status":"拟合通过，独立验证通过，待烧录复查"}
+            input("保持实际装机状态，远离铁桌和磁铁。按回车后缓慢翻转机架，让机头和机身各面轮流朝上。")
+            bias,matrix,fit=collect_magnetic(client,args.seconds,folder/"mag_train.csv")
+            report["mag"]={"bias_raw":bias.tolist(),"matrix":matrix.tolist(),"fit":fit,
+                           "status":"拟合通过，独立验证待完成"}
+            print("接下来自动采集独立验证数据。继续翻转，换几个倾斜方向。",flush=True)
+            quality=collect_magnetic(client,args.mag_verify_seconds,folder/"mag_independent.csv",
+                                     coefficients=(bias,matrix))
+            report["mag"].update(validation=quality,status="拟合通过，独立验证通过，待烧录复查")
             changes.update(CAL_MAG_VALID="1",CAL_MAG_BIAS_RAW=c_vector(bias),
                            CAL_MAG_MATRIX="{"+",".join(c_vector(row) for row in matrix)+"}")
     if stage in ("all","mapping"):
@@ -600,9 +679,9 @@ def run_wizard(client, args, folder, report):
             checks["accel"]=check_accel(poses,np.array(actual['3'][:3]),np.array(actual['3'][3:]))
         if "mag" in previous and "validation" in previous["mag"]:
             input("板上参数一致。回车后再次做独立磁场三维旋转：")
-            rows=collect_magnetic(client,args.mag_verify_seconds)
-            write_csv(folder/"mag_post_flash.csv",rows)
-            checks["mag"]=validate_magnetometer(fresh_magnetic(rows),actual['4'][:3],np.array(actual['4'][3:]).reshape(3,3))
+            coefficients=(actual["4"][:3],np.array(actual["4"][3:]).reshape(3,3))
+            checks["mag"]=collect_magnetic(client,args.mag_verify_seconds,folder/"mag_post_flash.csv",
+                                           coefficients=coefficients)
         report["post_flash"]={"status":"板上编译参数一致，独立复查通过", "coefficients":actual,"checks":checks}
     if changes:
         # Export only after the requested fits AND independent checks succeeded.
@@ -682,8 +761,8 @@ def main():
     parser.add_argument("--port",help="实际电脑上的蓝牙传出 COM，如 COM9")
     parser.add_argument("--baud",type=int,default=9600)
     parser.add_argument("--stage",choices=("all","link","raw","gyro","accel","mag","mapping","verify"),default="all")
-    parser.add_argument("--seconds",type=float,default=240,help="磁场训练采集秒数；raw 模式为观察秒数")
-    parser.add_argument("--mag-verify-seconds",type=float,default=90)
+    parser.add_argument("--seconds",type=float,default=240,help="磁场拟合采集上限秒数（默认 240）；raw 模式为观察秒数")
+    parser.add_argument("--mag-verify-seconds",type=float,default=90,help="独立磁场验证采集上限秒数（默认 90）")
     parser.add_argument("--output",type=Path,default=ROOT/"captures"/time.strftime("sensor_%Y%m%d_%H%M%S"))
     parser.add_argument("--base",type=Path,default=ROOT/"Core/Inc/sensor_calibration.h")
     parser.add_argument("--verify-from",type=Path)

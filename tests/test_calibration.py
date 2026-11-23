@@ -51,7 +51,9 @@ def test_header_export_preserves_unrelated_and_handles_continuations(tmp_path,na
     export_header(base,output,{"CAL_MAG_VALID":"1","CAL_MAG_MATRIX":"{{1.0f,0,0},{0,1.0f,0},{0,0,1.0f}}"})
     result=output.read_text()
     assert "#define CAL_MAG_VALID 1" in result
-    assert "#define CAL_IMU_TO_BODY" in result and "#define CAL_ACCEL_VALID 0" in result
+    unrelated_prefixes=("#define CAL_IMU_TO_BODY ", "#define CAL_ACCEL_")
+    unrelated=[line for line in text.splitlines() if line.startswith(unrelated_prefixes)]
+    assert unrelated==[line for line in result.splitlines() if line.startswith(unrelated_prefixes)]
     assert "#define CAL_MAG_MATRIX {{1.0f,0,0},{0,1.0f,0},{0,0,1.0f}}" in result
     checked=subprocess.run([native.host_compiler,"-std=c99","-fsyntax-only","-x","c",
                             "-include",str(output),"-"],input="float matrix[3][3]=CAL_MAG_MATRIX;\n",
